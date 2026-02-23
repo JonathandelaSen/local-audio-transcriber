@@ -13,9 +13,7 @@ A modern, privacy-first web application built with [Next.js](http://nextjs.org) 
 
 The application leverages a local Web Worker and client-side processing via Transformers.js to ensure efficient, private, and fast transcription directly on your device using WebGPU or WASM.
 
-<video controls width="100%">
-  <source src="./docs/app_recording.mov">
-</video>
+<video src="https://github.com/JonathandelaSen/local-audio-transcriber/raw/main/docs/app_recording.mov" controls width="100%"></video>
 
 ## Key Features
 
