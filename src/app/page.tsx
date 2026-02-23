@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import Link from "next/link";
 import { DragDropZone } from "@/components/DragDropZone";
 import { ProgressIndicator } from "@/components/ProgressIndicator";
 import { TranscriptionResult } from "@/components/TranscriptionResult";
@@ -8,10 +9,16 @@ import { useTranscriber } from "@/hooks/useTranscriber";
 import { decodeAudio } from "@/lib/audio";
 import { Toaster } from "@/components/ui/sonner";
 import { toast } from "sonner";
-import { AudioLines } from "lucide-react";
+import { AudioLines, StopCircle, FileAudio, CheckCircle2, AlertCircle, Loader2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
 
 export default function Home() {
-  const { transcript, chunks, audioProgress, isBusy, progressItems, debugLog, transcribe } = useTranscriber();
+  const [mounted, setMounted] = useState(false);
+  const { transcript, chunks, audioProgress, isBusy, progressItems, history, debugLog, transcribe, stopTranscription } = useTranscriber();
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   const handleFileSelect = async (file: File) => {
     try {
@@ -20,7 +27,7 @@ export default function Home() {
       }
       
       const audioData = await decodeAudio(file);
-      transcribe(audioData);
+      transcribe(audioData, file.name);
     } catch (err: any) {
       console.error(err);
       toast.error(err.message || "Failed to process audio file.", {
@@ -37,9 +44,18 @@ export default function Home() {
 
       <div className="w-full max-w-4xl z-10 space-y-16 mt-10">
         <div className="text-center space-y-8 animate-in fade-in slide-in-from-bottom-8 duration-1000">
-          <div className="inline-flex items-center justify-center p-5 rounded-[2rem] bg-white/[0.03] border border-white/10 backdrop-blur-2xl mb-2 shadow-2xl relative group">
-            <div className="absolute inset-0 bg-violet-500/20 blur-xl opacity-0 group-hover:opacity-100 transition-opacity duration-700" />
-            <AudioLines className="w-12 h-12 text-violet-400 relative z-10" />
+          <div className="flex justify-between items-start mb-2 group">
+              <div className="inline-flex items-center justify-center p-5 rounded-[2rem] bg-white/[0.03] border border-white/10 backdrop-blur-2xl shadow-2xl relative">
+                <div className="absolute inset-0 bg-violet-500/20 blur-xl opacity-0 group-hover:opacity-100 transition-opacity duration-700" />
+                <AudioLines className="w-12 h-12 text-violet-400 relative z-10" />
+              </div>
+              
+              <Link href="/history">
+                 <Button variant="outline" className="rounded-full bg-white/5 border-white/10 text-white/70 hover:text-white hover:bg-white/10">
+                    <FileAudio className="w-4 h-4 mr-2" />
+                    History
+                 </Button>
+              </Link>
           </div>
           <h1 className="text-6xl md:text-8xl font-black tracking-tighter text-transparent bg-clip-text bg-gradient-to-br from-white via-white/80 to-white/20 drop-shadow-sm">
             Neural Whisper
@@ -50,11 +66,23 @@ export default function Home() {
         </div>
 
         <div className="grid grid-cols-1 gap-10">
-          <DragDropZone onFileSelect={handleFileSelect} disabled={isBusy} />
+          <div className="space-y-4">
+             <DragDropZone onFileSelect={handleFileSelect} disabled={isBusy} />
+             {isBusy && (
+               <div className="flex justify-center">
+                 <Button 
+                   variant="destructive" 
+                   onClick={stopTranscription}
+                   className="rounded-xl px-8 py-6 text-lg font-medium shadow-lg shadow-red-500/20 hover:shadow-red-500/40 transition-all hover:scale-105"
+                 >
+                   <StopCircle className="w-5 h-5 mr-2" />
+                   Stop Transcription
+                 </Button>
+               </div>
+             )}
+          </div>
           
           <div className="space-y-10">
-            <ProgressIndicator progressItems={progressItems} />
-            <TranscriptionResult transcript={transcript} chunks={chunks} audioProgress={audioProgress} isBusy={isBusy} />
             {debugLog && (
                <div className="text-xs text-white/50 bg-black/50 p-4 rounded-xl max-h-40 overflow-auto whitespace-pre-wrap">
                   {debugLog}
