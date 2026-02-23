@@ -1,6 +1,10 @@
 # Neural Whisper (Local Audio Transcriber)
 
-![App Screenshot](./docs/screenshot.png) <!-- Replace this with a real screenshot of the app in action -->
+<div align="center">
+  <img src="./docs/main-screen.png" alt="Main Screen" width="30%" /> <!-- Replace with main screen screenshot -->
+  <img src="./docs/results-screen.png" alt="Results Screen" width="30%" /> <!-- Replace with transcription results screenshot -->
+  <img src="./docs/history-screen.png" alt="History Page" width="30%" /> <!-- Replace with history page screenshot -->
+</div>
 
 A modern, privacy-first web application built with [Next.js](https://nextjs.org) that allows users to seamlessly drag and drop audio files and receive highly accurate transcriptions in Spanish.
 
