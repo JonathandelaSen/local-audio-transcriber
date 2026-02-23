@@ -1,13 +1,30 @@
-# Audio Transcriber
+# Neural Whisper (Local Audio Transcriber)
 
-A modern web application built with [Next.js](https://nextjs.org) that allows users to seamlessly drag and drop audio files and receive an accurate transcription in Spanish. The application leverages a local Web Worker and client-side processing to ensure efficient, private, and fast transcription.
+![App Screenshot](./docs/screenshot.png) <!-- Replace this with a real screenshot of the app in action -->
 
-## Features
+A modern, privacy-first web application built with [Next.js](https://nextjs.org) that allows users to seamlessly drag and drop audio files and receive highly accurate transcriptions in Spanish.
 
-- **Drag and Drop Interface**: Easily upload audio files by dragging them onto the application window.
-- **Client-Side Processing**: Audio transcription is handled directly in the browser via Web Workers, ensuring privacy and eliminating server-side costs.
-- **Spanish Support**: Specifically configured to transcribe audio content in Spanish.
-- **Real-time Progress**: View the transcription status and partial results live while the model is processing.
+The application leverages a local Web Worker and client-side processing via Transformers.js to ensure efficient, private, and fast transcription directly on your device using WebGPU or WASM.
+
+**[Watch a video demo here](./docs/demo.mp4)** <!-- Replace with link to demo video -->
+
+## Key Features
+
+- 🔒 **100% Private (Local Processing)**: Audio transcription is handled directly in your browser. No data is ever sent to a remote server or API. Fast, secure, and zero server-side costs.
+- 🇪🇸 **Optimized for Spanish**: Specifically configured to transcribe audio content in Spanish with high accuracy.
+- ⚡ **Real-time Progress**: View the transcription status and partial results live while the neural model is processing.
+- ⏸️ **Cancellable Jobs**: Safely stop processing large files mid-way using the Stop Transcription button.
+- 🗃️ **Persistent History**: Your past transcriptions are automatically saved to `localStorage` so you can review them after refreshing or returning to the app later.
+- 💾 **Export & Downloads**: Download your generated transcripts as plain text (`.txt`) or as SubRip Subtitles (`.srt`) out of the box. Both features are available inline and in the History tab.
+- 📋 **One-Click Copying**: Easily copy full transcripts or subtitles with integrated clipboard buttons.
+
+## Tech Stack
+
+- **Framework**: Next.js 14 (App Router)
+- **Styling**: Tailwind CSS & shadcn/ui
+- **Icons**: Lucide React
+- **ML Engine**: Hugging Face Transformers.js (Whisper model)
+- **State/Persistence**: React Hooks & LocalStorage
 
 ## Getting Started
 
