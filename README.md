@@ -15,12 +15,20 @@ The application leverages a local Web Worker and client-side processing via Tran
 ## Key Features
 
 - 🔒 **100% Private (Local Processing)**: Audio transcription is handled directly in your browser. No data is ever sent to a remote server or API. Fast, secure, and zero server-side costs.
-- 🇪🇸 **Optimized for Spanish**: Specifically configured to transcribe audio content in Spanish with high accuracy.
+- 🌍 **Language Auto-Detection & Selector**: By default, the app automatically detects the spoken language. You can also explicitly set the language (Spanish, English, French, and 8 more) using the built-in selector for higher accuracy.
 - ⚡ **Real-time Progress**: View the transcription status and partial results live while the neural model is processing.
 - ⏸️ **Cancellable Jobs**: Safely stop processing large files mid-way using the Stop Transcription button.
 - 🗃️ **Persistent History**: Your past transcriptions are automatically saved to `localStorage` so you can review them after refreshing or returning to the app later.
 - 💾 **Export & Downloads**: Download your generated transcripts as plain text (`.txt`) or as SubRip Subtitles (`.srt`) out of the box. Both features are available inline and in the History tab.
 - 📋 **One-Click Copying**: Easily copy full transcripts or subtitles with integrated clipboard buttons.
+
+## Environment Variables
+
+To enable the raw debug logs interface on the main screen (useful for observing the underlying Web Worker message stream), create a `.env.local` file in the root directory and add the following:
+
+```env
+NEXT_PUBLIC_ENABLE_LOGS=true
+```
 
 ## Tech Stack
 

@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import { DragDropZone } from "@/components/DragDropZone";
+import { LanguageSelector } from "@/components/LanguageSelector";
 import { ProgressIndicator } from "@/components/ProgressIndicator";
 import { HistoryItemCard } from "@/components/HistoryItemCard";
 import { useTranscriber } from "@/hooks/useTranscriber";
@@ -14,6 +15,7 @@ import { Button } from "@/components/ui/button";
 
 export default function Home() {
   const [mounted, setMounted] = useState(false);
+  const [selectedLanguage, setSelectedLanguage] = useState("auto");
   const { transcript, chunks, audioProgress, isBusy, progressItems, history, debugLog, transcribe, stopTranscription } = useTranscriber();
 
   useEffect(() => {
@@ -27,7 +29,7 @@ export default function Home() {
       }
       
       const audioData = await decodeAudio(file);
-      transcribe(audioData, file.name);
+      transcribe(audioData, file.name, selectedLanguage);
     } catch (err: any) {
       console.error(err);
       toast.error(err.message || "Failed to process audio file.", {
@@ -61,13 +63,22 @@ export default function Home() {
             Neural Whisper
           </h1>
           <p className="text-xl md:text-2xl text-white/40 font-light max-w-2xl mx-auto tracking-wide">
-            100% private, browser-native translation for <span className="text-violet-300/80 font-medium">Spanish audio</span> via WebGPU.
+            100% private, browser-native transcription via WebGPU.
           </p>
         </div>
 
         <div className="grid grid-cols-1 gap-10">
-          <div className="space-y-4">
+          <div className="space-y-6">
              <DragDropZone onFileSelect={handleFileSelect} disabled={isBusy} />
+             
+             <div className="flex justify-center transition-opacity duration-300" style={{ opacity: isBusy ? 0.5 : 1 }}>
+               <LanguageSelector 
+                 value={selectedLanguage} 
+                 onValueChange={setSelectedLanguage} 
+                 disabled={isBusy} 
+               />
+             </div>
+             
              {isBusy && (
                <div className="flex justify-center">
                  <Button 

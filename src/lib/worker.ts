@@ -28,7 +28,7 @@ class PipelineSingleton {
 }
 
 self.addEventListener("message", async (event) => {
-  const { type, audio, duration } = event.data;
+  const { type, audio, duration, language } = event.data;
   
   if (type === "transcribe") {
     try {
@@ -58,13 +58,23 @@ self.addEventListener("message", async (event) => {
         return result;
       };
 
-      const output = await transcriber(audio, {
-        language: "spanish",
+      const options: any = {
         task: "transcribe",
         chunk_length_s: 30,
         stride_length_s: 5,
         return_timestamps: true,
-      });
+      };
+
+      if (language && language !== "auto") {
+         options.language = language;
+      }
+
+      const output = await transcriber(audio, options);
+
+      // output is usually an object or an array of objects.
+      // If auto-detect is active, the model usually populates output.language or it might be in the first item.
+      const detectedLanguage = Array.isArray(output) && output[0]?.language ? output[0].language : output?.language || "auto-detected";
+      self.postMessage({ status: "info", message: `Transcription complete. Language: ${detectedLanguage}` });
 
       self.postMessage({ status: "complete", output });
     } catch (error: any) {

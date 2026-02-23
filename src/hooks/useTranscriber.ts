@@ -64,6 +64,13 @@ export function useTranscriber() {
     }
   }, [history]);
 
+  // Helper to safely append logs if enabled
+  const appendLog = useCallback((message: string) => {
+    if (process.env.NEXT_PUBLIC_ENABLE_LOGS === "true") {
+      setDebugLog((prev) => prev ? `${prev}\n${message}` : message);
+    }
+  }, []);
+
   const initWorker = useCallback(() => {
     if (worker.current) return;
     
@@ -78,7 +85,7 @@ export function useTranscriber() {
       switch (status) {
         case "progress":
           if (data && data.name) {
-              setDebugLog((prev) => `${prev}\nPROGRESS: ${data.name} ${Math.round(data.progress || 0)}%`);
+              appendLog(`PROGRESS: ${data.name} ${Math.round(data.progress || 0)}%`);
           }
           setProgressItems((prev) => {
             const items = [...prev];
@@ -92,11 +99,11 @@ export function useTranscriber() {
           });
           break;
         case "ready":
-          setDebugLog((prev) => `${prev}\nREADY: Model loaded`);
+          appendLog(`READY: Model loaded`);
           setProgressItems([]); // Loading complete
           break;
         case "info":
-          setDebugLog((prev) => `${prev}\nINFO: ${e.data.message}`);
+          appendLog(`INFO: ${e.data.message}`);
           break;
         case "chunk_progress":
           setAudioProgress(e.data.progress);
@@ -105,7 +112,7 @@ export function useTranscriber() {
         case "update":
           // Transformers.js sends partial results in arrays sometimes
           const currentOutput = output && output[0] ? output[0] : output;
-          setDebugLog((prev) => prev + `\nUPDATE: ${JSON.stringify(currentOutput).substring(0, 100)}`);
+          appendLog(`UPDATE: ${JSON.stringify(currentOutput).substring(0, 100)}`);
           if (currentOutput && currentOutput.text) {
               setTranscript(currentOutput.text);
               setChunks(currentOutput.chunks || []);
@@ -122,7 +129,7 @@ export function useTranscriber() {
           }
           break;
         case "complete":
-          setDebugLog((prev) => prev + `\nCOMPLETE: ${JSON.stringify(output).substring(0, 100)}`);
+          appendLog(`COMPLETE: ${JSON.stringify(output).substring(0, 100)}`);
           setIsBusy(false);
           setAudioProgress(100);
           if (output && output.text) {
@@ -140,7 +147,7 @@ export function useTranscriber() {
           currentFileIdRef.current = null;
           break;
         case "error":
-          setDebugLog((prev) => prev + `\nERROR: ${error}`);
+          appendLog(`ERROR: ${error}`);
           setIsBusy(false);
           console.error("Worker error:", error);
           setHistory(prev => prev.map(item => 
@@ -161,7 +168,7 @@ export function useTranscriber() {
     };
   }, [initWorker]);
 
-  const transcribe = (audioData: Float32Array, filename: string) => {
+  const transcribe = (audioData: Float32Array, filename: string, language: string = "auto") => {
     // Re-init worker if it was terminated by stopTranscription
     initWorker();
     
@@ -170,7 +177,8 @@ export function useTranscriber() {
     setChunks([]);
     setAudioProgress(0);
     setProgressItems([]);
-    setDebugLog("Starting...");
+    setDebugLog("");
+    appendLog("Starting...");
     
     const id = Date.now().toString();
     currentFileIdRef.current = id;
@@ -187,6 +195,7 @@ export function useTranscriber() {
       type: "transcribe",
       audio: audioData,
       duration,
+      language
     });
   };
 
@@ -199,7 +208,7 @@ export function useTranscriber() {
     
     setIsBusy(false);
     setProgressItems([]);
-    setDebugLog((prev) => prev + "\nSTOPPED by user.");
+    appendLog("STOPPED by user.");
     
     setHistory(prev => prev.map(item => 
       item.id === activeId ? { ...item, status: "stopped" } : item
