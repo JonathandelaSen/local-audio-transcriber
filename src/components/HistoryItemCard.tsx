@@ -12,7 +12,7 @@ import {
 } from "@/components/ui/select";
 import { 
   Trash2, FileText, Download, Clock, CheckCircle2, 
-  AlertCircle, MessageSquare, Loader2, Copy, Check, Globe
+  AlertCircle, MessageSquare, Loader2, Copy, Check, Globe, FastForward
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -34,9 +34,10 @@ interface HistoryItemCardProps {
   onDelete?: (id: string) => void;
   audioProgress?: number;
   autoExpand?: boolean;
+  onUpdateTiming?: (id: string, shiftSeconds: number) => void;
 }
 
-export function HistoryItemCard({ item, onDelete, audioProgress, autoExpand = false }: HistoryItemCardProps) {
+export function HistoryItemCard({ item, onDelete, audioProgress, autoExpand = false, onUpdateTiming }: HistoryItemCardProps) {
   const [expandedText, setExpandedText] = useState(autoExpand);
   const [expandedChunks, setExpandedChunks] = useState(false);
   const [copiedTxt, setCopiedTxt] = useState(false);
@@ -44,6 +45,7 @@ export function HistoryItemCard({ item, onDelete, audioProgress, autoExpand = fa
   const [sourceLang, setSourceLang] = useState("original");
   const [targetLang, setTargetLang] = useState("original");
   const [cachedTranslations, setCachedTranslations] = useState<Record<string, any[]>>({});
+  const [shiftSeconds, setShiftSeconds] = useState<string>("0");
 
   const { 
     isTranslating, 
@@ -72,6 +74,12 @@ export function HistoryItemCard({ item, onDelete, audioProgress, autoExpand = fa
       });
     }
   }, [translatorError]);
+
+  useEffect(() => {
+    // Source subtitle timings changed (e.g. manual delay). Cached translations
+    // keep old timestamps, so force re-translation for non-original targets.
+    setCachedTranslations({});
+  }, [item.chunks]);
 
   const activeChunks = targetLang === "original" ? item.chunks : (cachedTranslations[targetLang] || null);
   const needsTranslation = targetLang !== "original" && !activeChunks;
@@ -136,6 +144,12 @@ export function HistoryItemCard({ item, onDelete, audioProgress, autoExpand = fa
                    <span className="flex items-center text-violet-400">
                       <Loader2 className="w-4 h-4 mr-1.5 animate-spin"/> Processing
                       {audioProgress !== undefined && ` ${audioProgress}%`}
+                   </span>
+                )}
+                
+                {item.isEdited && (
+                   <span className="flex items-center px-1.5 py-0.5 rounded bg-fuchsia-500/20 text-fuchsia-300 text-xs font-medium border border-fuchsia-500/30">
+                      Edited
                    </span>
                 )}
              </div>
@@ -207,6 +221,7 @@ export function HistoryItemCard({ item, onDelete, audioProgress, autoExpand = fa
              </div>
 
              {item.chunks && item.chunks.length > 0 && (
+               <>
                <div className="flex flex-wrap items-center justify-between gap-3 p-3 bg-white/[0.02] border border-white/5 rounded-xl">
                   <div className="flex items-center gap-3">
                      <span className="text-white/40 text-xs font-medium uppercase tracking-wider pl-1">Subtitles (SRT)</span>
@@ -243,7 +258,7 @@ export function HistoryItemCard({ item, onDelete, audioProgress, autoExpand = fa
                      </div>
                   </div>
 
-                  <div className="flex items-center gap-1">
+                   <div className="flex items-center gap-1">
                      {needsTranslation ? (
                         <Button 
                          variant="ghost" size="sm" 
@@ -273,11 +288,47 @@ export function HistoryItemCard({ item, onDelete, audioProgress, autoExpand = fa
                           </Button>
                         </div>
                      )}
+                   </div>
+                </div>
+               
+               {onUpdateTiming && (
+                  <div className="flex items-center justify-between gap-3 p-3 bg-white/[0.02] border border-white/5 rounded-xl">
+                     <div className="flex items-center gap-3">
+                        <FastForward className="w-4 h-4 text-white/40 ml-1" />
+                        <span className="text-white/60 text-xs">Delay subtitles (seconds):</span>
+                     </div>
+                     <div className="flex items-center gap-2">
+                        <input
+                           type="number"
+                           step="0.1"
+                           placeholder="0"
+                           value={shiftSeconds}
+                           onChange={(e) => setShiftSeconds(e.target.value)}
+                           className="w-20 bg-black/20 border border-white/10 rounded-lg px-2 py-1 text-sm text-white/90 focus:outline-none focus:border-fuchsia-500/50"
+                        />
+                        <Button
+                           variant="secondary"
+                           size="sm"
+                           className="bg-white/5 hover:bg-white/10 text-white/80 h-7 text-xs"
+                           disabled={isTranslating || !shiftSeconds || isNaN(parseFloat(shiftSeconds))}
+                           onClick={() => {
+                              const shift = parseFloat(shiftSeconds);
+                              if (!isNaN(shift)) {
+                                 onUpdateTiming(item.id, shift);
+                                 setCachedTranslations({});
+                                 toast.success("Timing updated", { className: "bg-green-500/20 border-green-500/50 text-green-100" });
+                              }
+                           }}
+                        >
+                           Apply Shift
+                        </Button>
+                     </div>
                   </div>
-               </div>
+               )}
+               </>
              )}
-         </div>
-       )}
+             </div>
+           )}
        
        {expandedText && item.transcript && (
           <div className="bg-black/40 border border-white/5 rounded-2xl p-6 text-white/70 leading-relaxed whitespace-pre-wrap animate-in fade-in slide-in-from-top-4 mb-6">

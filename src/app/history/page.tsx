@@ -29,6 +29,27 @@ export default function HistoryPage() {
     localStorage.setItem("transcriberHistory", JSON.stringify(updated));
   };
 
+  const updateSubtitleTiming = (id: string, shiftSeconds: number) => {
+    const updated = history.map((item) => {
+      if (item.id !== id || !item.chunks) return item;
+
+      return {
+        ...item,
+        chunks: item.chunks.map((chunk) => ({
+          ...chunk,
+          timestamp: [
+            chunk.timestamp?.[0] == null ? null : Math.max(0, chunk.timestamp[0] + shiftSeconds),
+            chunk.timestamp?.[1] == null ? null : Math.max(0, chunk.timestamp[1] + shiftSeconds),
+          ],
+        })),
+        isEdited: true,
+      };
+    });
+
+    setHistory(updated);
+    localStorage.setItem("transcriberHistory", JSON.stringify(updated));
+  };
+
   if (!mounted) return null;
 
   return (
@@ -64,7 +85,12 @@ export default function HistoryPage() {
         ) : (
           <div className="space-y-6 animate-in fade-in slide-in-from-bottom-8 duration-700">
             {history.map((item) => (
-               <HistoryItemCard key={item.id} item={item} onDelete={deleteItem} />
+               <HistoryItemCard
+                 key={item.id}
+                 item={item}
+                 onDelete={deleteItem}
+                 onUpdateTiming={updateSubtitleTiming}
+               />
             ))}
           </div>
         )}

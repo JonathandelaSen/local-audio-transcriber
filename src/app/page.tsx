@@ -16,7 +16,18 @@ import { Button } from "@/components/ui/button";
 export default function Home() {
   const [mounted, setMounted] = useState(false);
   const [selectedLanguage, setSelectedLanguage] = useState("auto");
-  const { transcript, chunks, audioProgress, isBusy, progressItems, history, debugLog, transcribe, stopTranscription } = useTranscriber();
+  const {
+    transcript,
+    chunks,
+    audioProgress,
+    isBusy,
+    progressItems,
+    history,
+    debugLog,
+    transcribe,
+    stopTranscription,
+    updateSubtitleTiming,
+  } = useTranscriber();
 
   useEffect(() => {
     setMounted(true);
@@ -96,7 +107,12 @@ export default function Home() {
             {(progressItems.length > 0 || isBusy || transcript) && history[0] && (
                 <div className="animate-in fade-in slide-in-from-bottom-4 duration-700 space-y-4">
                   <ProgressIndicator progressItems={progressItems} />
-                  <HistoryItemCard item={history[0]} audioProgress={audioProgress} autoExpand={true} />
+                  <HistoryItemCard
+                    item={history[0]}
+                    audioProgress={audioProgress}
+                    autoExpand={true}
+                    onUpdateTiming={updateSubtitleTiming}
+                  />
                 </div>
             )}
             {debugLog && (

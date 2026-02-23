@@ -14,6 +14,7 @@ export interface HistoryItem {
   transcript?: string;
   chunks?: any[];
   error?: string;
+  isEdited?: boolean;
   timestamp: number;
 }
 
@@ -220,5 +221,24 @@ export function useTranscriber() {
       setHistory(prev => prev.filter(item => item.id !== id));
   };
 
-  return { transcript, chunks, audioProgress, isBusy, progressItems, history, debugLog, transcribe, stopTranscription, deleteHistoryItem };
+  const updateSubtitleTiming = (id: string, shiftSeconds: number) => {
+      setHistory(prev => prev.map(item => {
+          if (item.id !== id || !item.chunks) return item;
+          // Create new mapped chunks with shifted timestamps
+          const newChunks = item.chunks.map(chunk => ({
+              ...chunk,
+              timestamp: [
+                  chunk.timestamp[0] !== null ? Math.max(0, chunk.timestamp[0] + shiftSeconds) : null,
+                  chunk.timestamp[1] !== null ? Math.max(0, chunk.timestamp[1] + shiftSeconds) : null
+              ]
+          }));
+          return {
+              ...item,
+              chunks: newChunks,
+              isEdited: true
+          };
+      }));
+  };
+
+  return { transcript, chunks, audioProgress, isBusy, progressItems, history, debugLog, transcribe, stopTranscription, deleteHistoryItem, updateSubtitleTiming };
 }
