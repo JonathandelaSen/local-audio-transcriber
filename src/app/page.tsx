@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 import Link from "next/link";
 import { DragDropZone } from "@/components/DragDropZone";
 import { ProgressIndicator } from "@/components/ProgressIndicator";
-import { TranscriptionResult } from "@/components/TranscriptionResult";
+import { HistoryItemCard } from "@/components/HistoryItemCard";
 import { useTranscriber } from "@/hooks/useTranscriber";
 import { decodeAudio } from "@/lib/audio";
 import { Toaster } from "@/components/ui/sonner";
@@ -81,8 +81,13 @@ export default function Home() {
                </div>
              )}
           </div>
-          
           <div className="space-y-10">
+            {(progressItems.length > 0 || isBusy || transcript) && history[0] && (
+                <div className="animate-in fade-in slide-in-from-bottom-4 duration-700 space-y-4">
+                  <ProgressIndicator progressItems={progressItems} />
+                  <HistoryItemCard item={history[0]} audioProgress={audioProgress} autoExpand={true} />
+                </div>
+            )}
             {debugLog && (
                <div className="text-xs text-white/50 bg-black/50 p-4 rounded-xl max-h-40 overflow-auto whitespace-pre-wrap">
                   {debugLog}
