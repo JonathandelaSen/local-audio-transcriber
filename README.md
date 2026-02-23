@@ -22,8 +22,16 @@ The application leverages a local Web Worker and client-side processing via Tran
 - ⚡ **Real-time Progress**: View the transcription status and partial results live while the neural model is processing.
 - ⏸️ **Cancellable Jobs**: Safely stop processing large files mid-way using the Stop Transcription button.
 - 🗃️ **Persistent History**: Your past transcriptions are automatically saved to `localStorage` so you can review them after refreshing or returning to the app later.
+- 🌐 **Subtitle Translation**: Translate your `.srt` subtitles into 10 different target languages entirely client-side using lightweight Web Workers and dynamically downloaded models.
 - 💾 **Export & Downloads**: Download your generated transcripts as plain text (`.txt`) or as SubRip Subtitles (`.srt`) out of the box. Both features are available inline and in the History tab.
 - 📋 **One-Click Copying**: Easily copy full transcripts or subtitles with integrated clipboard buttons.
+
+## NLP Models
+
+This project strictly adheres to a local-first philosophy. To achieve this within the memory limits of a web browser, we use specific quantized ONNX models via Transformers.js:
+
+- **Transcription:** Uses `Xenova/whisper-tiny` for fast, lightweight english transcription.
+- **Translation:** Uses targeted `Xenova/opus-mt-{src}-{tgt}` models from Helsinki-NLP. Instead of loading a massive 600M+ parameter universal translation model (which crashes browsers with 1GB+ KV cache buffers), we dynamically fetch ~75MB models specific _only_ to the source and target language pair you select. These models are cached in your browser's IndexedDB for instant, offline reuse.
 
 ## Environment Variables
 

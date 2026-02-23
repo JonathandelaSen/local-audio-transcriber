@@ -1,14 +1,33 @@
-"use client";
-
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { formatTime, generateSrt } from "@/lib/srt";
 import { HistoryItem } from "@/hooks/useTranscriber";
+import { useTranslator } from "@/hooks/useTranslator";
 import { Button } from "@/components/ui/button";
 import { 
+  Select, 
+  SelectContent, 
+  SelectItem, 
+  SelectTrigger, 
+  SelectValue 
+} from "@/components/ui/select";
+import { 
   Trash2, FileText, Download, Clock, CheckCircle2, 
-  AlertCircle, MessageSquare, Loader2, Copy, Check 
+  AlertCircle, MessageSquare, Loader2, Copy, Check, Globe
 } from "lucide-react";
 import { toast } from "sonner";
+
+const TRANSLATION_LANGUAGES = [
+  { value: "es", label: "Spanish" },
+  { value: "en", label: "English" },
+  { value: "fr", label: "French" },
+  { value: "de", label: "German" },
+  { value: "it", label: "Italian" },
+  { value: "pt", label: "Portuguese" },
+  { value: "nl", label: "Dutch" },
+  { value: "ru", label: "Russian" },
+  { value: "ja", label: "Japanese" },
+  { value: "zh", label: "Chinese" },
+];
 
 interface HistoryItemCardProps {
   item: HistoryItem;
@@ -22,6 +41,51 @@ export function HistoryItemCard({ item, onDelete, audioProgress, autoExpand = fa
   const [expandedChunks, setExpandedChunks] = useState(false);
   const [copiedTxt, setCopiedTxt] = useState(false);
   const [copiedSrt, setCopiedSrt] = useState(false);
+  const [sourceLang, setSourceLang] = useState("original");
+  const [targetLang, setTargetLang] = useState("original");
+  const [cachedTranslations, setCachedTranslations] = useState<Record<string, any[]>>({});
+
+  const { 
+    isTranslating, 
+    isModelLoading, 
+    translationProgress, 
+    translatedChunks, 
+    translateChunks,
+    error: translatorError
+  } = useTranslator();
+
+  useEffect(() => {
+    if (translatedChunks && targetLang !== "original") {
+      setCachedTranslations(prev => ({ ...prev, [targetLang]: translatedChunks }));
+      toast.success("Translation complete!", { className: "bg-green-500/20 border-green-500/50 text-green-100" });
+      setExpandedChunks(true);
+    }
+  }, [translatedChunks, targetLang]);
+
+  useEffect(() => {
+    if (translatorError) {
+      const cleanError = translatorError.includes("404") 
+        ? "Translation model for this exact language pair is unavailable." 
+        : translatorError;
+      toast.error(`Translation failed: ${cleanError}`, { 
+        className: "bg-red-500/20 border-red-500/50 text-red-100" 
+      });
+    }
+  }, [translatorError]);
+
+  const activeChunks = targetLang === "original" ? item.chunks : (cachedTranslations[targetLang] || null);
+  const needsTranslation = targetLang !== "original" && !activeChunks;
+
+  const handleTranslate = () => {
+    if (item.chunks) {
+        translateChunks(item.chunks, targetLang, sourceLang);
+    }
+  };
+
+  const handleDownloadSrt = () => {
+    if (!activeChunks) return;
+    downloadFile(generateSrt(activeChunks), targetLang === "original" ? item.filename : `${item.filename}_${targetLang}`, "srt");
+  };
 
   const downloadFile = (content: string, filename: string, extension: string) => {
     const blob = new Blob([content], { type: "text/plain" });
@@ -44,8 +108,8 @@ export function HistoryItemCard({ item, onDelete, audioProgress, autoExpand = fa
   };
 
   const copySrt = () => {
-    if (!item.chunks || item.chunks.length === 0) return;
-    navigator.clipboard.writeText(generateSrt(item.chunks));
+    if (!activeChunks) return;
+    navigator.clipboard.writeText(generateSrt(activeChunks));
     setCopiedSrt(true);
     toast("Copied subtitles to clipboard!", { className: "bg-green-500/20 border-green-500/50 text-green-100" });
     setTimeout(() => setCopiedSrt(false), 2000);
@@ -143,26 +207,74 @@ export function HistoryItemCard({ item, onDelete, audioProgress, autoExpand = fa
              </div>
 
              {item.chunks && item.chunks.length > 0 && (
-                 <div className="flex items-center bg-white/[0.03] rounded-lg p-1 border border-white/5">
-                     <Button 
-                        variant="ghost"
-                        size="sm"
-                        className="text-fuchsia-300 hover:bg-fuchsia-500/20 hover:text-fuchsia-200"
-                        onClick={() => downloadFile(generateSrt(item.chunks!), item.filename, "srt")}
-                        title="Download Subtitles"
-                     >
-                       <Download className="w-4 h-4 mr-2" /> .srt
-                     </Button>
-                     <Button 
-                        variant="ghost"
-                        size="sm"
-                        className="text-white/60 hover:bg-white/10"
-                        onClick={copySrt}
-                        title="Copy Subtitles"
-                     >
-                       {copiedSrt ? <Check className="w-4 h-4 text-green-400" /> : <Copy className="w-4 h-4" />}
-                     </Button>
-                 </div>
+               <div className="flex flex-wrap items-center justify-between gap-3 p-3 bg-white/[0.02] border border-white/5 rounded-xl">
+                  <div className="flex items-center gap-3">
+                     <span className="text-white/40 text-xs font-medium uppercase tracking-wider pl-1">Subtitles (SRT)</span>
+                     <div className="flex items-center gap-1 bg-black/20 rounded-lg p-1 border border-white/5">
+                       <Select value={sourceLang} onValueChange={setSourceLang} disabled={isTranslating || isModelLoading}>
+                         <SelectTrigger className="h-7 w-[90px] bg-transparent border-0 text-white/70 focus:ring-fuchsia-500/50 text-xs font-medium">
+                           <SelectValue placeholder="From" />
+                         </SelectTrigger>
+                         <SelectContent className="bg-zinc-900 border-white/10 text-white/90">
+                           <SelectItem value="original" className="text-xs font-bold border-b border-white/5 mb-1 pb-1 focus:bg-fuchsia-500/20 cursor-pointer">Original</SelectItem>
+                           {TRANSLATION_LANGUAGES.map(lang => (
+                             <SelectItem key={`src-${lang.value}`} value={lang.value} className="text-xs focus:bg-fuchsia-500/20 cursor-pointer">
+                               {lang.label}
+                             </SelectItem>
+                           ))}
+                         </SelectContent>
+                       </Select>
+
+                       <span className="text-white/30 text-xs font-bold px-1">→</span>
+
+                       <Select value={targetLang} onValueChange={setTargetLang} disabled={isTranslating || isModelLoading}>
+                         <SelectTrigger className="h-7 w-[100px] bg-transparent border-0 text-white/70 focus:ring-fuchsia-500/50 text-xs font-medium">
+                           <SelectValue placeholder="To" />
+                         </SelectTrigger>
+                         <SelectContent className="bg-zinc-900 border-white/10 text-white/90">
+                           <SelectItem value="original" className="text-xs font-bold border-b border-white/5 mb-1 pb-1 focus:bg-fuchsia-500/20 cursor-pointer">Original</SelectItem>
+                           {TRANSLATION_LANGUAGES.map(lang => (
+                             <SelectItem key={`tgt-${lang.value}`} value={lang.value} className="text-xs focus:bg-fuchsia-500/20 cursor-pointer">
+                               {lang.label}
+                             </SelectItem>
+                           ))}
+                         </SelectContent>
+                       </Select>
+                     </div>
+                  </div>
+
+                  <div className="flex items-center gap-1">
+                     {needsTranslation ? (
+                        <Button 
+                         variant="ghost" size="sm" 
+                         className="text-fuchsia-300 hover:bg-fuchsia-500/20 hover:text-fuchsia-200 disabled:opacity-50"
+                         onClick={handleTranslate} 
+                         disabled={isTranslating || isModelLoading || sourceLang === "original"}
+                        >
+                          {isModelLoading || isTranslating ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Globe className="w-4 h-4 mr-2" />}
+                          {isModelLoading ? "Loading Model..." : isTranslating ? `Translating ${translationProgress}%` : "Translate Now"}
+                        </Button>
+                     ) : (
+                        <div className="flex items-center gap-1 bg-white/[0.03] rounded-lg p-1 border border-white/5">
+                          <Button 
+                             variant="ghost" size="sm" 
+                             className="text-fuchsia-300 hover:bg-fuchsia-500/20 hover:text-fuchsia-200"
+                             onClick={handleDownloadSrt}
+                          >
+                            <Download className="w-4 h-4 mr-2" /> Download SRT
+                          </Button>
+                          <Button 
+                             variant="ghost" size="sm" 
+                             className="text-white/60 hover:bg-white/10 px-2"
+                             onClick={copySrt}
+                             title="Copy Subtitles"
+                          >
+                            {copiedSrt ? <Check className="w-4 h-4 text-green-400" /> : <Copy className="w-4 h-4" />}
+                          </Button>
+                        </div>
+                     )}
+                  </div>
+               </div>
              )}
          </div>
        )}
@@ -173,9 +285,9 @@ export function HistoryItemCard({ item, onDelete, audioProgress, autoExpand = fa
           </div>
        )}
 
-       {expandedChunks && item.chunks && (
+       {expandedChunks && activeChunks && (
           <div className="space-y-3 bg-black/20 border border-white/5 rounded-2xl p-6 animate-in fade-in slide-in-from-top-4">
-             {item.chunks.map((chunk, i) => (
+             {activeChunks.map((chunk, i) => (
                <div key={i} className="flex gap-4 p-3 hover:bg-white/5 rounded-xl transition-colors">
                  <span className="text-violet-400/60 font-mono text-sm shrink-0 mt-0.5">
                    {formatTime(chunk.timestamp[0])}
