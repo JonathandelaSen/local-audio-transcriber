@@ -36,44 +36,77 @@ function parseFfmpegLogProgressSeconds(message: string): number | null {
   return parseFfmpegTimecodeToSeconds(match[1]);
 }
 
-function assEscape(text: string): string {
+function drawtextEscape(text: string): string {
+  // FFmpeg drawtext escaping: escape special filter chars and single quotes
   return text
     .replace(/\\/g, "\\\\")
-    .replace(/\{/g, "\\{")
-    .replace(/\}/g, "\\}")
-    .replace(/\r?\n/g, "\\N");
+    .replace(/'/g, "'\\''")
+    .replace(/:/g, "\\:")
+    .replace(/\[/g, "\\[")
+    .replace(/\]/g, "\\]")
+    .replace(/;/g, "\\;")
+    .replace(/%/g, "%%")
+    .replace(/\r/g, "");
 }
 
-function toAssTime(seconds: number): string {
-  const safe = Math.max(0, Number.isFinite(seconds) ? seconds : 0);
-  const h = Math.floor(safe / 3600);
-  const m = Math.floor((safe % 3600) / 60);
-  const s = Math.floor(safe % 60);
-  const cs = Math.floor((safe - Math.floor(safe)) * 100);
-  return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}.${String(cs).padStart(2, "0")}`;
+const FONT_URL = "https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/inter/Inter%5Bopsz%2Cwght%5D.ttf";
+const FONT_PATH = "/tmp/Inter.ttf";
+
+let fontLoaded = false;
+
+async function ensureFontLoaded(ff: Awaited<ReturnType<typeof getFFmpeg>>): Promise<boolean> {
+  if (fontLoaded) return true;
+  try {
+    const response = await fetch(FONT_URL);
+    if (!response.ok) return false;
+    const fontData = new Uint8Array(await response.arrayBuffer());
+    await ff.writeFile(FONT_PATH, fontData);
+    fontLoaded = true;
+    return true;
+  } catch (err) {
+    console.warn("Failed to load font for subtitle burn-in:", err);
+    return false;
+  }
 }
 
-function colorForStyle(style: CreatorShortPlan["subtitleStyle"]): {
-  primary: string;
-  outline: string;
-  back: string;
-  bold: number;
+function colorForStyleHex(style: CreatorShortPlan["subtitleStyle"]): {
+  fontcolor: string;
+  bordercolor: string;
+  boxcolor: string;
+  bold: boolean;
 } {
   if (style === "creator_neon") {
-    return { primary: "&H00FFF7E8", outline: "&H009C3D00", back: "&H78000000", bold: 1 };
+    return { fontcolor: "0xE8F7FF", bordercolor: "0x003D9C", boxcolor: "0x000000@0.47", bold: true };
   }
   if (style === "clean_caption") {
-    return { primary: "&H00FFFFFF", outline: "&H00323232", back: "&H5A000000", bold: 0 };
+    return { fontcolor: "0xFFFFFF", bordercolor: "0x323232", boxcolor: "0x000000@0.35", bold: false };
   }
-  return { primary: "&H00FFFFFF", outline: "&H000A0A0A", back: "&H6E000000", bold: 1 };
+  return { fontcolor: "0xFFFFFF", bordercolor: "0x0A0A0A", boxcolor: "0x000000@0.43", bold: true };
 }
 
-function buildAssSubtitleScript(
+function wrapSubtitleText(text: string, maxCharsPerLine: number): string {
+  const words = text.split(/\s+/);
+  const lines: string[] = [];
+  let currentLine = "";
+  for (const word of words) {
+    if (currentLine && (currentLine.length + 1 + word.length) > maxCharsPerLine) {
+      lines.push(currentLine);
+      currentLine = word;
+    } else {
+      currentLine = currentLine ? `${currentLine} ${word}` : word;
+    }
+  }
+  if (currentLine) lines.push(currentLine);
+  return lines.join("\n");
+}
+
+function buildDrawtextSubtitleFilters(
   subtitleChunks: SubtitleChunk[],
   clip: CreatorViralClip,
   plan: CreatorShortPlan,
-  editor: CreatorShortEditorState
-): string | null {
+  editor: CreatorShortEditorState,
+  timeOffsetSeconds: number = 0
+): string[] {
   const chunks = (subtitleChunks || [])
     .map((chunk) => {
       const startAbs = chunk.timestamp?.[0];
@@ -91,38 +124,35 @@ function buildAssSubtitleScript(
     })
     .filter((row): row is { start: number; end: number; text: string } => !!row);
 
-  if (!chunks.length) return null;
+  if (!chunks.length) return [];
 
-  const subtitleColors = colorForStyle(plan.subtitleStyle);
+  const colors = colorForStyleHex(plan.subtitleStyle);
   const fontSize = Math.round(clamp(56 * editor.subtitleScale, 36, 96));
-  const x = Math.round(clamp((editor.subtitleXPositionPct / 100) * OUTPUT_WIDTH, 80, OUTPUT_WIDTH - 80));
-  const y = Math.round(clamp((editor.subtitleYOffsetPct / 100) * OUTPUT_HEIGHT, 120, OUTPUT_HEIGHT - 80));
-  const marginL = Math.max(24, Math.round((OUTPUT_WIDTH * 0.12)));
-  const marginR = marginL;
-  const marginV = Math.max(24, OUTPUT_HEIGHT - y);
+  // Estimate max chars per line: ~80% of output width / (fontSize * 0.55 avg char width)
+  const maxCharsPerLine = Math.max(10, Math.round((OUTPUT_WIDTH * 0.80) / (fontSize * 0.55)));
+  const x = `(w*${(editor.subtitleXPositionPct / 100).toFixed(4)}-tw/2)`;
+  const y = `(h*${(editor.subtitleYOffsetPct / 100).toFixed(4)}-th/2)`;
 
-  const header = `[Script Info]
-ScriptType: v4.00+
-PlayResX: ${OUTPUT_WIDTH}
-PlayResY: ${OUTPUT_HEIGHT}
-WrapStyle: 2
-ScaledBorderAndShadow: yes
-YCbCr Matrix: TV.601
-
-[V4+ Styles]
-Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,Arial,${fontSize},${subtitleColors.primary},&H000000FF,${subtitleColors.outline},${subtitleColors.back},${subtitleColors.bold},0,0,0,100,100,0,0,1,3.2,0.6,2,${marginL},${marginR},${marginV},1
-
-[Events]
-Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text`;
-
-  const events = chunks.map((chunk) => {
-    const text = assEscape(chunk.text);
-    return `Dialogue: 0,${toAssTime(chunk.start)},${toAssTime(chunk.end)},Default,,0,0,0,,{\\an5\\pos(${x},${y})}${text}`;
+  return chunks.map((chunk) => {
+    const wrapped = wrapSubtitleText(chunk.text, maxCharsPerLine);
+    const escaped = drawtextEscape(wrapped);
+    return (
+      `drawtext=fontfile=${FONT_PATH}` +
+      `:text='${escaped}'` +
+      `:fontsize=${fontSize}` +
+      `:fontcolor=${colors.fontcolor}` +
+      `:borderw=3` +
+      `:bordercolor=${colors.bordercolor}` +
+      `:box=1` +
+      `:boxcolor=${colors.boxcolor}` +
+      `:boxborderw=8` +
+      `:x=${x}` +
+      `:y=${y}` +
+      `:enable='between(t,${(chunk.start + timeOffsetSeconds).toFixed(3)},${(chunk.end + timeOffsetSeconds).toFixed(3)})'`
+    );
   });
-
-  return `${header}\n${events.join("\n")}\n`;
 }
+
 
 function getFfmpegFilter(
   sourceWidth: number,
@@ -237,7 +267,7 @@ export async function exportShortVideoLocally(input: LocalShortExportInput): Pro
     )}.mp4`
   );
   const outputPath = `out_${Date.now()}.mp4`;
-  const assPath = `subs_${Date.now()}.ass`;
+
   const preview = getFfmpegFilter(
     input.sourceVideoSize.width,
     input.sourceVideoSize.height,
@@ -246,11 +276,16 @@ export async function exportShortVideoLocally(input: LocalShortExportInput): Pro
     input.previewVideoRect ?? null
   );
 
-  const subtitleAss = buildAssSubtitleScript(input.subtitleChunks ?? [], input.clip, input.plan, input.editor);
-
   const clipDuration = Math.max(0.5, input.clip.endSeconds - input.clip.startSeconds);
   const inputSeekSeconds = Math.max(0, input.clip.startSeconds - FAST_SEEK_CUSHION_SECONDS);
   const exactTrimAfterSeekSeconds = Math.max(0, input.clip.startSeconds - inputSeekSeconds);
+
+  // Offset subtitle times by exactTrimAfterSeekSeconds because the filter graph
+  // processes frames starting from the first -ss seek point, not the clip start.
+  // The second -ss then trims and rebases output timestamps.
+  const subtitleDrawtextFilters = buildDrawtextSubtitleFilters(
+    input.subtitleChunks ?? [], input.clip, input.plan, input.editor, exactTrimAfterSeekSeconds
+  );
 
   let lastProgressPct = 0;
   const emitProgress = (pct: number) => {
@@ -307,7 +342,10 @@ export async function exportShortVideoLocally(input: LocalShortExportInput): Pro
   };
   ff.on("log", logHandler);
 
-  const baseArgs = [
+  // Build the video filter chain: scale/pad/crop + optional drawtext subtitle filters
+  const baseFilter = preview.filter;
+
+  const ffmpegBaseArgs = [
     "-ss",
     String(inputSeekSeconds),
     "-i",
@@ -317,7 +355,7 @@ export async function exportShortVideoLocally(input: LocalShortExportInput): Pro
     "-t",
     String(clipDuration),
     "-vf",
-    preview.filter,
+    baseFilter,
     "-c:v",
     "libx264",
     "-preset",
@@ -341,29 +379,35 @@ export async function exportShortVideoLocally(input: LocalShortExportInput): Pro
     await ff.mount("WORKERFS" as never, { files: [input.sourceFile] }, mountDir);
     emitProgress(4);
 
-    if (subtitleAss) {
-      await ff.writeFile(assPath, new TextEncoder().encode(subtitleAss));
-      emitProgress(6);
-      try {
-        const subtitleArgs = [...baseArgs];
+    // Attempt subtitle burn-in with drawtext filters
+    if (subtitleDrawtextFilters.length > 0) {
+      const hasFontLoaded = await ensureFontLoaded(ff);
+      if (hasFontLoaded) {
+        emitProgress(6);
+        const fullFilter = [baseFilter, ...subtitleDrawtextFilters].join(",");
+        const subtitleArgs = [...ffmpegBaseArgs];
         const vfIndex = subtitleArgs.indexOf("-vf");
         if (vfIndex !== -1) {
-          subtitleArgs[vfIndex + 1] = `${preview.filter},ass=${assPath}`;
+          subtitleArgs[vfIndex + 1] = fullFilter;
         }
-        emitProgress(8);
-        await runFfmpegExecWithFallbackProgress(subtitleArgs);
-        usedSubtitleBurnIn = true;
-      } catch (err) {
-        console.warn("ASS subtitle burn-in failed, retrying export without subtitles", err);
         try {
-          await ff.deleteFile(outputPath);
-        } catch {}
+          emitProgress(8);
+          await runFfmpegExecWithFallbackProgress(subtitleArgs);
+          usedSubtitleBurnIn = true;
+        } catch (err) {
+          console.warn("Drawtext subtitle burn-in failed, retrying export without subtitles:", err);
+          try { await ff.deleteFile(outputPath); } catch {}
+          emitProgress(8);
+          await runFfmpegExecWithFallbackProgress(ffmpegBaseArgs);
+        }
+      } else {
+        console.warn("Font not available, exporting without subtitles");
         emitProgress(8);
-        await runFfmpegExecWithFallbackProgress(baseArgs);
+        await runFfmpegExecWithFallbackProgress(ffmpegBaseArgs);
       }
     } else {
       emitProgress(8);
-      await runFfmpegExecWithFallbackProgress(baseArgs);
+      await runFfmpegExecWithFallbackProgress(ffmpegBaseArgs);
     }
 
     emitProgress(98);
@@ -387,7 +431,7 @@ export async function exportShortVideoLocally(input: LocalShortExportInput): Pro
       "-t",
       String(clipDuration),
       "-vf",
-      usedSubtitleBurnIn ? `${preview.filter},ass=subs.ass` : preview.filter,
+      usedSubtitleBurnIn ? `${baseFilter},...drawtext` : baseFilter,
       "-c:v",
       "libx264",
       "-preset",
@@ -428,9 +472,6 @@ export async function exportShortVideoLocally(input: LocalShortExportInput): Pro
   } finally {
     try {
       await ff.deleteFile(outputPath);
-    } catch {}
-    try {
-      await ff.deleteFile(assPath);
     } catch {}
     try {
       await ff.unmount(mountDir);
