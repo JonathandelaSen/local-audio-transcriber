@@ -1146,7 +1146,7 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
           </div>
         </div>
 
-        <div className="grid grid-cols-1 xl:grid-cols-[1.1fr_1.3fr] gap-6 items-start">
+        <div className="max-w-4xl mx-auto w-full">
           <Card className="bg-white/[0.03] border-white/10 text-white shadow-2xl backdrop-blur-xl">
             <CardHeader>
               <CardTitle className="flex items-center gap-2 text-white">
@@ -1292,18 +1292,7 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
                     </div>
                   )}
 
-                  {isToolLocked && (
-                    <div
-                      className={cn(
-                        "rounded-xl border p-3 text-sm",
-                        isVideoInfoPage
-                          ? "border-emerald-300/20 bg-emerald-400/5 text-emerald-100/85"
-                          : "border-orange-300/20 bg-orange-400/5 text-orange-100/85"
-                      )}
-                    >
-                      Dedicated workspace mode. The other tool is now a separate page in the creator hub.
-                    </div>
-                  )}
+
 
                   {activeTool === "video_info" && (
                     <div className="space-y-3">
@@ -1379,139 +1368,7 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
             </CardContent>
           </Card>
 
-          {activeTool !== "clip_lab" && (isToolLocked ? (
-            <Card
-              className={cn(
-                "border-white/10 text-white shadow-2xl backdrop-blur-xl overflow-hidden",
-                isVideoInfoPage
-                  ? "bg-gradient-to-br from-emerald-500/10 via-cyan-500/6 to-white/[0.03]"
-                  : "bg-gradient-to-br from-orange-500/10 via-fuchsia-500/6 to-white/[0.03]"
-              )}
-            >
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  {isVideoInfoPage ? (
-                    <>
-                      <Lightbulb className="w-5 h-5 text-emerald-300" /> Packaging-Only Workspace
-                    </>
-                  ) : (
-                    <>
-                      <Clapperboard className="w-5 h-5 text-orange-300" /> Shorts-Only Workspace
-                    </>
-                  )}
-                </CardTitle>
-                <CardDescription className="text-white/50">
-                  {isVideoInfoPage
-                    ? "This page is optimized for transcript-to-packaging generation. Clip discovery, editing, and export are intentionally moved out."
-                    : "This page is optimized for short-form production. Long-form title/description/SEO generation is intentionally moved out."}
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
-                  <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
-                    <div className="text-xs uppercase tracking-[0.18em] text-white/45 mb-2">What lives here</div>
-                    <ul className="space-y-2 text-white/75">
-                      {isVideoInfoPage ? (
-                        <>
-                          <li>• Title ideas, descriptions, chapters, hashtags, hooks</li>
-                          <li>• Content pack summaries and repurpose prompts</li>
-                          <li>• Transcript-level insights without clip generation</li>
-                        </>
-                      ) : (
-                        <>
-                          <li>• Viral clip finder + platform shorts planner</li>
-                          <li>• Vertical framing, subtitle positioning, save/export</li>
-                          <li>• Saved shorts lifecycle and local MP4 render history</li>
-                        </>
-                      )}
-                    </ul>
-                  </div>
-                  <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
-                    <div className="text-xs uppercase tracking-[0.18em] text-white/45 mb-2">Navigation</div>
-                    <div className="space-y-3 text-white/75">
-                      <p>Use the creator hub to jump between tool pages without mixing controls or results in one workspace.</p>
-                      <div className="flex flex-wrap gap-2">
-                        <Link href="/creator">
-                          <Button variant="ghost" className="bg-white/5 hover:bg-white/10 text-white/85">
-                            <Sparkles className="w-4 h-4 mr-2" /> Hub
-                          </Button>
-                        </Link>
-                        <Link href={isVideoInfoPage ? "/creator/shorts" : "/creator/video-info"}>
-                          <Button
-                            variant="ghost"
-                            className={cn(
-                              "text-white/85",
-                              isVideoInfoPage ? "bg-cyan-400/10 hover:bg-cyan-400/15" : "bg-fuchsia-400/10 hover:bg-fuchsia-400/15"
-                            )}
-                          >
-                            {isVideoInfoPage ? (
-                              <>
-                                <Clapperboard className="w-4 h-4 mr-2" /> Shorts
-                              </>
-                            ) : (
-                              <>
-                                <Lightbulb className="w-4 h-4 mr-2" /> Video Info
-                              </>
-                            )}
-                          </Button>
-                        </Link>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          ) : (
-            <Card className="bg-gradient-to-br from-cyan-500/10 via-white/[0.03] to-orange-500/10 border-white/10 text-white shadow-2xl backdrop-blur-xl overflow-hidden">
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Sparkles className="w-5 h-5 text-orange-300" /> Tool Split (Token-Aware Workflow)
-                </CardTitle>
-                <CardDescription className="text-white/50">
-                  Run only the generation path you need. Video info mode supports scoped blocks so you can skip pinned comments, hashtags, or insights when not needed.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
-                  <button
-                    type="button"
-                    onClick={() => setActiveTool("video_info")}
-                    className={cn(
-                      "rounded-2xl border p-4 text-left transition-colors",
-                      activeTool === "video_info"
-                        ? "border-cyan-300/35 bg-cyan-400/8 shadow-[0_0_25px_rgba(34,211,238,0.12)]"
-                        : "border-white/10 bg-black/20 hover:bg-black/25"
-                    )}
-                  >
-                    <div className="font-semibold text-white mb-1 flex items-center gap-2">
-                      <Lightbulb className="w-4 h-4 text-cyan-300" /> Video Info Generator
-                    </div>
-                    <div className="text-white/60">
-                      Generate selected long-form packaging blocks only: titles, description, hashtags, pinned comment, thumbnail hooks, chapters, content notes, insights.
-                    </div>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setActiveTool("clip_lab")}
-                    className={cn(
-                      "rounded-2xl border p-4 text-left transition-colors",
-                      "border-white/10 bg-black/20 hover:bg-black/25"
-                    )}
-                  >
-                    <div className="font-semibold text-white mb-1 flex items-center gap-2">
-                      <Clapperboard className="w-4 h-4 text-orange-300" /> Clip Lab + Editor
-                    </div>
-                    <div className="text-white/60">
-                      Find viral moments, inspect shorts plans, then frame and mock-render a vertical cut from the selected clip.
-                    </div>
-                  </button>
-                </div>
-                <div className="rounded-xl border border-white/10 bg-black/20 p-4 text-sm text-white/70">
-                  Tip: use <span className="text-white">Video Info Generator</span> for cheap packaging passes and switch to <span className="text-white">Clip Lab + Editor</span> only when you are ready to cut short-form outputs.
-                </div>
-              </CardContent>
-            </Card>
-          ))}
+
         </div>
 
         {(analysis || activeTool === "clip_lab") && (
@@ -2106,65 +1963,80 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
                           <div className="rounded-xl border border-white/10 bg-black/20 p-4 space-y-3">
                             <div className="text-xs uppercase tracking-wider text-white/50">Trim + Framing</div>
                             {editedClip && (
-                              <div className="rounded-lg border border-white/10 bg-white/5 p-2.5 space-y-2">
-                                <div className="grid grid-cols-3 gap-2">
-                                  <label className="text-[11px] text-white/55">
-                                    Start (s)
-                                    <input
-                                      type="number"
-                                      min={0}
-                                      step={0.1}
-                                      value={editedClip.startSeconds}
-                                      onChange={(e) => {
-                                        const value = Number(e.target.value);
-                                        if (!Number.isFinite(value)) return;
-                                        setEditedClipStartSeconds(value);
-                                      }}
-                                      className="mt-1 w-full rounded-md border border-white/10 bg-black/30 px-2 py-1 text-xs text-white"
-                                    />
-                                  </label>
-                                  <label className="text-[11px] text-white/55">
-                                    End (s)
-                                    <input
-                                      type="number"
-                                      min={1}
-                                      step={0.1}
-                                      value={editedClip.endSeconds}
-                                      onChange={(e) => {
-                                        const value = Number(e.target.value);
-                                        if (!Number.isFinite(value)) return;
-                                        setEditedClipEndSeconds(value);
-                                      }}
-                                      className="mt-1 w-full rounded-md border border-white/10 bg-black/30 px-2 py-1 text-xs text-white"
-                                    />
-                                  </label>
-                                  <label className="text-[11px] text-white/55">
-                                    Duration (s)
-                                    <input
-                                      type="number"
-                                      min={1}
-                                      step={0.1}
-                                      value={editedClip.durationSeconds}
-                                      onChange={(e) => {
-                                        const value = Number(e.target.value);
-                                        if (!Number.isFinite(value)) return;
-                                        setEditedClipDurationSeconds(value);
-                                      }}
-                                      className="mt-1 w-full rounded-md border border-white/10 bg-black/30 px-2 py-1 text-xs text-white"
-                                    />
-                                  </label>
+                              <div className="rounded-xl border border-white/10 bg-black/40 p-4 space-y-5">
+                                <div className="space-y-3">
+                                  <div className="flex items-center justify-between gap-3">
+                                    <label className="text-xs uppercase tracking-widest text-emerald-300/80 font-medium w-20">Start</label>
+                                    <div className="relative flex-1">
+                                      <input
+                                        type="number"
+                                        min={0}
+                                        step={0.1}
+                                        value={editedClip.startSeconds}
+                                        onChange={(e) => {
+                                          const value = Number(e.target.value);
+                                          if (!Number.isFinite(value)) return;
+                                          setEditedClipStartSeconds(value);
+                                        }}
+                                        className="w-full bg-white/5 border border-white/10 rounded-lg py-2 pl-3 pr-6 text-left text-sm font-medium text-emerald-100 shadow-inner focus:outline-none focus:border-emerald-400/50 focus:bg-emerald-400/10 transition-colors"
+                                      />
+                                      <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-white/30 pointer-events-none">sec</span>
+                                    </div>
+                                  </div>
+                                  
+                                  <div className="flex items-center justify-between gap-3">
+                                    <label className="text-xs uppercase tracking-widest text-orange-300/80 font-medium w-20">End</label>
+                                    <div className="relative flex-1">
+                                      <input
+                                        type="number"
+                                        min={1}
+                                        step={0.1}
+                                        value={editedClip.endSeconds}
+                                        onChange={(e) => {
+                                          const value = Number(e.target.value);
+                                          if (!Number.isFinite(value)) return;
+                                          setEditedClipEndSeconds(value);
+                                        }}
+                                        className="w-full bg-white/5 border border-white/10 rounded-lg py-2 pl-3 pr-6 text-left text-sm font-medium text-orange-100 shadow-inner focus:outline-none focus:border-orange-400/50 focus:bg-orange-400/10 transition-colors"
+                                      />
+                                      <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-white/30 pointer-events-none">sec</span>
+                                    </div>
+                                  </div>
+
+                                  <div className="flex items-center justify-between gap-3">
+                                    <label className="text-xs uppercase tracking-widest text-cyan-300/80 font-medium w-20">Duration</label>
+                                    <div className="relative flex-1">
+                                      <input
+                                        type="number"
+                                        min={1}
+                                        step={0.1}
+                                        value={editedClip.durationSeconds}
+                                        onChange={(e) => {
+                                          const value = Number(e.target.value);
+                                          if (!Number.isFinite(value)) return;
+                                          setEditedClipDurationSeconds(value);
+                                        }}
+                                        className="w-full bg-white/5 border border-white/10 rounded-lg py-2 pl-3 pr-6 text-left text-sm font-medium text-cyan-100 shadow-inner focus:outline-none focus:border-cyan-400/50 focus:bg-cyan-400/10 transition-colors"
+                                      />
+                                      <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-white/30 pointer-events-none">sec</span>
+                                    </div>
+                                  </div>
                                 </div>
-                                <div className="flex flex-wrap gap-1.5">
-                                  <Button type="button" size="sm" variant="ghost" className="h-7 px-2 text-xs bg-white/5 hover:bg-white/10 text-white/80" onClick={() => adjustEditedClipDurationSeconds(-5)}>
+
+                                <div className="flex flex-wrap justify-center gap-2 pt-4 border-t border-white/5">
+                                  <Button type="button" size="sm" variant="ghost" className="h-8 px-4 text-xs font-medium rounded-full bg-white/5 border border-white/10 hover:bg-white/10 hover:border-white/20 text-white/70 transition-colors" onClick={() => adjustEditedClipDurationSeconds(-5)}>
                                     -5s
                                   </Button>
-                                  <Button type="button" size="sm" variant="ghost" className="h-7 px-2 text-xs bg-white/5 hover:bg-white/10 text-white/80" onClick={() => adjustEditedClipDurationSeconds(-1)}>
+                                  <Button type="button" size="sm" variant="ghost" className="h-8 px-4 text-xs font-medium rounded-full bg-white/5 border border-white/10 hover:bg-white/10 hover:border-white/20 text-white/70 transition-colors" onClick={() => adjustEditedClipDurationSeconds(-1)}>
                                     -1s
                                   </Button>
-                                  <Button type="button" size="sm" variant="ghost" className="h-7 px-2 text-xs bg-white/5 hover:bg-white/10 text-white/80" onClick={() => adjustEditedClipDurationSeconds(1)}>
+                                  <Button type="button" size="sm" variant="ghost" className="h-8 px-4 text-xs font-medium rounded-full bg-white/5 border border-white/10 hover:bg-white/10 hover:border-white/20 text-white/70 transition-colors" onClick={() => adjustEditedClipDurationSeconds(0.5)}>
+                                    +0.5s
+                                  </Button>
+                                  <Button type="button" size="sm" variant="ghost" className="h-8 px-4 text-xs font-medium rounded-full bg-white/5 border border-white/10 hover:bg-white/10 hover:border-white/20 text-white/70 transition-colors" onClick={() => adjustEditedClipDurationSeconds(1)}>
                                     +1s
                                   </Button>
-                                  <Button type="button" size="sm" variant="ghost" className="h-7 px-2 text-xs bg-white/5 hover:bg-white/10 text-white/80" onClick={() => adjustEditedClipDurationSeconds(5)}>
+                                  <Button type="button" size="sm" variant="ghost" className="h-8 px-4 text-xs font-medium rounded-full bg-white/5 border border-white/10 hover:bg-white/10 hover:border-white/20 text-white/70 transition-colors" onClick={() => adjustEditedClipDurationSeconds(5)}>
                                     +5s
                                   </Button>
                                 </div>
