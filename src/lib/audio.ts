@@ -1,4 +1,18 @@
+import { extractAudioWithFFmpeg } from "./ffmpeg";
+
 export async function decodeAudio(file: File): Promise<Float32Array> {
+    const isVideo = file.type.includes("video") || file.name.match(/\.(mp4|webm|mov|mkv)$/i);
+    const isLargeFile = file.size > 50 * 1024 * 1024; // > 50MB
+    
+    if (isVideo || isLargeFile) {
+        console.log("Using FFmpeg to extract audio from large/video file to prevent memory crash...");
+        try {
+            return await extractAudioWithFFmpeg(file);
+        } catch (e) {
+            console.error("FFmpeg extraction failed. Falling back to native ArrayBuffer decode (may crash on large files).", e);
+        }
+    }
+
     const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)({
       sampleRate: 16000,
     });

@@ -65,15 +65,15 @@ self.addEventListener("message", async (event) => {
         return_timestamps: true,
       };
 
-      if (language && language !== "auto") {
-         options.language = language;
+      if (language) {
+        options.language = language;
       }
 
       const output = await transcriber(audio, options);
 
       // output is usually an object or an array of objects.
-      // If auto-detect is active, the model usually populates output.language or it might be in the first item.
-      const detectedLanguage = Array.isArray(output) && output[0]?.language ? output[0].language : output?.language || "auto-detected";
+      const detectedLanguage =
+        (Array.isArray(output) && output[0]?.language ? output[0].language : output?.language) || language || "unknown";
       self.postMessage({ status: "info", message: `Transcription complete. Language: ${detectedLanguage}` });
 
       self.postMessage({ status: "complete", output });
