@@ -124,18 +124,22 @@ export interface CreatorShortRenderRequest {
   clip: CreatorViralClip;
   plan: CreatorShortPlan;
   subtitleChunks?: SubtitleChunk[];
-  editor: {
-    zoom: number;
-    panX: number;
-    panY: number;
-    subtitleScale: number;
-    subtitleYOffsetPct: number;
-  };
+  editor: CreatorShortEditorState;
+}
+
+export interface CreatorShortEditorState {
+  zoom: number;
+  panX: number;
+  panY: number;
+  subtitleScale: number;
+  subtitleXPositionPct: number;
+  subtitleYOffsetPct: number;
+  showSafeZones?: boolean;
 }
 
 export interface CreatorShortRenderResponse {
   ok: true;
-  providerMode: CreatorAIProviderMode | "mock-render";
+  providerMode: CreatorAIProviderMode | "mock-render" | "local-browser";
   jobId: string;
   status: "queued" | "processing" | "completed";
   createdAt: number;

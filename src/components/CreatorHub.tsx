@@ -1,22 +1,31 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import {
   ArrowLeft,
   CalendarClock,
+  CheckCircle2,
   Clapperboard,
   Copy,
+  Download,
   FileVideo,
   Film,
   Flame,
+  FolderOpen,
+  HardDriveDownload,
   Layers,
   Lightbulb,
   Loader2,
+  Pause,
   Play,
   Rocket,
   Scissors,
+  Save,
   Sparkles,
+  TriangleAlert,
+  Volume2,
+  VolumeX,
   WandSparkles,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -27,6 +36,7 @@ import {
   getLatestTranscript,
   getSubtitleById,
   getTranscriptById,
+  makeId,
   sortSubtitleVersions,
   sortTranscriptVersions,
   type HistoryItem,
@@ -36,13 +46,17 @@ import {
 import {
   secondsToClock,
   type CreatorAnalyzeRequest,
+  type CreatorShortEditorState,
   type CreatorShortPlan,
-  type CreatorShortRenderRequest,
+  type CreatorShortRenderResponse,
   type CreatorViralClip,
   type CreatorVideoInfoBlock,
 } from "@/lib/creator/types";
+import type { CreatorShortExportRecord, CreatorShortProjectRecord } from "@/lib/creator/storage";
+import { exportShortVideoLocally } from "@/lib/creator/local-render";
 import { useCreatorHub } from "@/hooks/useCreatorHub";
 import { useHistoryLibrary } from "@/hooks/useHistoryLibrary";
+import { useCreatorShortsLibrary } from "@/hooks/useCreatorShortsLibrary";
 import { cn } from "@/lib/utils";
 
 import { Button } from "@/components/ui/button";
@@ -125,6 +139,39 @@ function getTranscriptDurationSeconds(item: HistoryItem | undefined, transcriptI
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB"];
+  const power = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+  const value = bytes / 1024 ** power;
+  return `${value >= 10 || power === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[power]}`;
+}
+
+async function readVideoDimensions(file: File, existingVideoEl?: HTMLVideoElement | null): Promise<{ width: number; height: number }> {
+  if (existingVideoEl?.videoWidth && existingVideoEl?.videoHeight) {
+    return { width: existingVideoEl.videoWidth, height: existingVideoEl.videoHeight };
+  }
+
+  const url = URL.createObjectURL(file);
+  try {
+    const video = document.createElement("video");
+    video.preload = "metadata";
+    video.src = url;
+    await new Promise<void>((resolve, reject) => {
+      const onLoaded = () => resolve();
+      const onError = () => reject(new Error("Failed to read source video metadata"));
+      video.addEventListener("loadedmetadata", onLoaded, { once: true });
+      video.addEventListener("error", onError, { once: true });
+    });
+    if (!video.videoWidth || !video.videoHeight) {
+      throw new Error("Source video metadata missing dimensions");
+    }
+    return { width: video.videoWidth, height: video.videoHeight };
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
 const VIDEO_INFO_BLOCK_OPTIONS: Array<{
   value: CreatorVideoInfoBlock;
   label: string;
@@ -187,7 +234,14 @@ function toggleBlock(list: CreatorVideoInfoBlock[], block: CreatorVideoInfoBlock
 
 export function CreatorHub() {
   const { history, isLoading: isLoadingHistory, error: historyError, refresh } = useHistoryLibrary();
-  const { analysis, isAnalyzing, analyzeError, analyze, lastRender, isRendering, renderError, renderShort } = useCreatorHub();
+  const {
+    analysis,
+    isAnalyzing,
+    analyzeError,
+    analyze,
+    lastRender,
+    setLastRender,
+  } = useCreatorHub();
 
   const [selectedProjectId, setSelectedProjectId] = useState<string>("");
   const [selectedTranscriptId, setSelectedTranscriptId] = useState<string>("");
@@ -214,18 +268,37 @@ export function CreatorHub() {
   const [panX, setPanX] = useState(0);
   const [panY, setPanY] = useState(0);
   const [subtitleScale, setSubtitleScale] = useState(1);
+  const [subtitleXPositionPct, setSubtitleXPositionPct] = useState(50);
   const [subtitleYOffsetPct, setSubtitleYOffsetPct] = useState(78);
   const [showSafeZones, setShowSafeZones] = useState(true);
+  const [activeSavedShortProjectId, setActiveSavedShortProjectId] = useState<string>("");
+  const [isExportingShort, setIsExportingShort] = useState(false);
+  const [exportProgressPct, setExportProgressPct] = useState(0);
+  const [localRenderError, setLocalRenderError] = useState<string | null>(null);
 
   const [mediaUrl, setMediaUrl] = useState<string | null>(null);
   const [mediaFilename, setMediaFilename] = useState<string | null>(null);
+  const [mediaFile, setMediaFile] = useState<File | null>(null);
   const [isVideoMedia, setIsVideoMedia] = useState(false);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [isMuted, setIsMuted] = useState(true);
+  const [currentTime, setCurrentTime] = useState(0);
   const previewVideoRef = useRef<HTMLVideoElement | null>(null);
+  const previewFrameRef = useRef<HTMLDivElement | null>(null);
 
   const selectedProject = useMemo(() => {
     if (!history.length) return undefined;
     return history.find((item) => item.id === selectedProjectId) ?? history[0];
   }, [history, selectedProjectId]);
+
+  const {
+    projects: savedShortProjects,
+    exportsByProjectId,
+    isLoading: isLoadingShortsLibrary,
+    error: shortsLibraryError,
+    upsertProject,
+    upsertExport,
+  } = useCreatorShortsLibrary(selectedProject?.id);
 
   const transcriptOptions = useMemo(() => {
     if (!selectedProject) return [];
@@ -273,6 +346,7 @@ export function CreatorHub() {
       if (!selectedProject) {
         setMediaUrl(null);
         setMediaFilename(null);
+        setMediaFile(null);
         setIsVideoMedia(false);
         return;
       }
@@ -283,18 +357,21 @@ export function CreatorHub() {
         if (!record?.file) {
           setMediaUrl(null);
           setMediaFilename(null);
+          setMediaFile(null);
           setIsVideoMedia(false);
           return;
         }
         objectUrl = URL.createObjectURL(record.file);
         setMediaUrl(objectUrl);
         setMediaFilename(record.file.name);
+        setMediaFile(record.file);
         setIsVideoMedia(record.file.type.includes("video") || /\.(mp4|webm|mov|mkv)$/i.test(record.file.name));
       } catch (error) {
         console.error("Failed to load media preview", error);
         if (!cancelled) {
           setMediaUrl(null);
           setMediaFilename(null);
+          setMediaFile(null);
           setIsVideoMedia(false);
         }
       }
@@ -308,20 +385,51 @@ export function CreatorHub() {
     };
   }, [selectedProject]);
 
+  useEffect(() => {
+    setActiveSavedShortProjectId("");
+    setLocalRenderError(null);
+    setExportProgressPct(0);
+    setIsPlaying(false);
+  }, [selectedProject?.id]);
+
+  // Video event callbacks — attached as JSX props on the <video>, no effect needed
+  const handleVideoTimeUpdate = useCallback(() => {
+    const video = previewVideoRef.current;
+    if (video) setCurrentTime(video.currentTime);
+  }, []);
+  const handleVideoPlay = useCallback(() => setIsPlaying(true), []);
+  const handleVideoPause = useCallback(() => setIsPlaying(false), []);
+  const handleVideoEnded = useCallback(() => setIsPlaying(false), []);
+
+  const activeSavedShortProject = useMemo(() => {
+    if (!savedShortProjects.length) return undefined;
+    return savedShortProjects.find((item) => item.id === activeSavedShortProjectId) ?? undefined;
+  }, [activeSavedShortProjectId, savedShortProjects]);
+
   const selectedClip = useMemo(() => {
-    if (!analysis?.viralClips?.length) return undefined;
-    return analysis.viralClips.find((clip) => clip.id === selectedClipId) ?? analysis.viralClips[0];
-  }, [analysis, selectedClipId]);
+    if (analysis?.viralClips?.length) {
+      return analysis.viralClips.find((clip) => clip.id === selectedClipId) ?? analysis.viralClips[0];
+    }
+    return activeSavedShortProject?.clip;
+  }, [activeSavedShortProject?.clip, analysis, selectedClipId]);
 
   const plansForSelectedClip = useMemo(() => {
-    if (!analysis?.shortsPlans?.length || !selectedClip) return [];
-    return analysis.shortsPlans.filter((plan) => plan.clipId === selectedClip.id);
-  }, [analysis, selectedClip]);
+    if (analysis?.shortsPlans?.length && selectedClip) {
+      const fromAnalysis = analysis.shortsPlans.filter((plan) => plan.clipId === selectedClip.id);
+      if (fromAnalysis.length) return fromAnalysis;
+    }
+    if (activeSavedShortProject?.plan && activeSavedShortProject.plan.clipId === selectedClip?.id) {
+      return [activeSavedShortProject.plan];
+    }
+    return [];
+  }, [activeSavedShortProject?.plan, analysis, selectedClip]);
 
   const selectedPlan = useMemo(() => {
-    if (!plansForSelectedClip.length) return undefined;
-    return plansForSelectedClip.find((plan) => plan.id === selectedPlanId) ?? plansForSelectedClip[0];
-  }, [plansForSelectedClip, selectedPlanId]);
+    if (plansForSelectedClip.length) {
+      return plansForSelectedClip.find((plan) => plan.id === selectedPlanId) ?? plansForSelectedClip[0];
+    }
+    return activeSavedShortProject?.plan;
+  }, [activeSavedShortProject?.plan, plansForSelectedClip, selectedPlanId]);
 
   const clipTextPreview = useMemo(() => {
     if (!selectedClip || !selectedSubtitle) return "";
@@ -340,10 +448,77 @@ export function CreatorHub() {
     };
   }, [selectedClip, trimEndNudge, trimStartNudge]);
 
+  useEffect(() => {
+    if (!activeSavedShortProject || !selectedClip) return;
+    if (selectedClip.id !== activeSavedShortProject.clipId) return;
+
+    const nextStartNudge = Number((activeSavedShortProject.clip.startSeconds - selectedClip.startSeconds).toFixed(2));
+    const nextEndNudge = Number((activeSavedShortProject.clip.endSeconds - selectedClip.endSeconds).toFixed(2));
+
+    setTrimStartNudge((prev) => (Math.abs(prev - nextStartNudge) < 0.01 ? prev : nextStartNudge));
+    setTrimEndNudge((prev) => (Math.abs(prev - nextEndNudge) < 0.01 ? prev : nextEndNudge));
+  }, [activeSavedShortProject, selectedClip]);
+
+  // Seek video to clip start when clip changes
+  useEffect(() => {
+    const video = previewVideoRef.current;
+    if (!video || !editedClip) return;
+    video.currentTime = editedClip.startSeconds;
+    setCurrentTime(editedClip.startSeconds);
+  }, [editedClip?.startSeconds, editedClip?.id, mediaUrl]);
+
+  // Enforce clip boundaries during playback
+  useEffect(() => {
+    if (!editedClip || !isPlaying) return;
+    const video = previewVideoRef.current;
+    if (!video) return;
+    if (currentTime >= editedClip.endSeconds) {
+      video.currentTime = editedClip.startSeconds;
+    }
+  }, [currentTime, editedClip, isPlaying]);
+
+  const togglePlayPause = useCallback(() => {
+    const video = previewVideoRef.current;
+    if (!video) return;
+    if (video.paused) {
+      if (editedClip && video.currentTime >= editedClip.endSeconds) {
+        video.currentTime = editedClip.startSeconds;
+      }
+      void video.play();
+    } else {
+      video.pause();
+    }
+  }, [editedClip]);
+
+  const toggleMute = useCallback(() => {
+    const video = previewVideoRef.current;
+    if (!video) return;
+    video.muted = !video.muted;
+    setIsMuted(video.muted);
+  }, []);
+
   const selectedClipSubtitleChunks = useMemo(() => {
     if (!editedClip || !selectedSubtitle) return [];
     return clipSubtitleChunks(editedClip, selectedSubtitle.chunks);
   }, [editedClip, selectedSubtitle]);
+
+  const currentEditorState = useMemo<CreatorShortEditorState>(
+    () => ({
+      zoom,
+      panX,
+      panY,
+      subtitleScale,
+      subtitleXPositionPct,
+      subtitleYOffsetPct,
+      showSafeZones,
+    }),
+    [panX, panY, showSafeZones, subtitleScale, subtitleXPositionPct, subtitleYOffsetPct, zoom]
+  );
+
+  const savedExportsForActiveShort = useMemo(
+    () => (activeSavedShortProject ? exportsByProjectId.get(activeSavedShortProject.id) ?? [] : []),
+    [activeSavedShortProject, exportsByProjectId]
+  );
 
   const selectedVideoInfoBlocks = useMemo(() => new Set(videoInfoBlocks), [videoInfoBlocks]);
   const showTitleIdeas = selectedVideoInfoBlocks.has("titleIdeas");
@@ -356,7 +531,8 @@ export function CreatorHub() {
   const showInsights = selectedVideoInfoBlocks.has("insights");
 
   const canAnalyze = !!selectedProject && !!selectedTranscript && !!selectedSubtitle && !!selectedTranscript.transcript;
-  const canRender = !!selectedProject && !!editedClip && !!selectedPlan;
+  const canRender = !!selectedProject && !!selectedTranscript && !!selectedSubtitle && !!editedClip && !!selectedPlan;
+  const canExportVideo = canRender && !!mediaFile && isVideoMedia;
 
   const creatorRequestPayload = useMemo<CreatorAnalyzeRequest | null>(() => {
     if (!selectedProject || !selectedTranscript || !selectedSubtitle || !selectedTranscript.transcript) return null;
@@ -417,37 +593,271 @@ export function CreatorHub() {
     }
   };
 
-  const handleRenderShort = async () => {
-    if (!selectedProject || !editedClip || !selectedPlan) return;
+  const buildCurrentShortProjectRecord = useCallback(
+    (
+      status: CreatorShortProjectRecord["status"],
+      options?: { id?: string; lastExportId?: string; lastError?: string }
+    ): CreatorShortProjectRecord | null => {
+      if (!selectedProject || !selectedTranscript || !selectedSubtitle || !editedClip || !selectedPlan) return null;
 
-    const payload: CreatorShortRenderRequest = {
-      filename: mediaFilename || selectedProject.filename,
-      clip: editedClip,
-      plan: selectedPlan,
-      subtitleChunks: selectedClipSubtitleChunks,
-      editor: {
-        zoom,
-        panX,
-        panY,
-        subtitleScale,
-        subtitleYOffsetPct,
-      },
-    };
+      const existing =
+        (options?.id && savedShortProjects.find((record) => record.id === options.id)) ||
+        savedShortProjects.find(
+          (record) =>
+            record.sourceProjectId === selectedProject.id &&
+            record.transcriptId === selectedTranscript.id &&
+            record.subtitleId === selectedSubtitle.id &&
+            record.clipId === editedClip.id &&
+            record.planId === selectedPlan.id
+        );
+
+      const now = Date.now();
+      return {
+        id: existing?.id ?? makeId("shortproj"),
+        sourceProjectId: selectedProject.id,
+        sourceMediaId: selectedProject.mediaId || selectedProject.id,
+        sourceFilename: mediaFilename || selectedProject.filename,
+        transcriptId: selectedTranscript.id,
+        subtitleId: selectedSubtitle.id,
+        clipId: editedClip.id,
+        planId: selectedPlan.id,
+        platform: selectedPlan.platform,
+        name:
+          existing?.name ??
+          `${platformLabel(selectedPlan.platform)} • ${secondsToClock(editedClip.startSeconds)}-${secondsToClock(editedClip.endSeconds)}`,
+        clip: editedClip,
+        plan: selectedPlan,
+        editor: currentEditorState,
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: now,
+        status,
+        lastExportId: options?.lastExportId ?? existing?.lastExportId,
+        lastError: options?.lastError,
+      };
+    },
+    [
+      currentEditorState,
+      editedClip,
+      mediaFilename,
+      savedShortProjects,
+      selectedPlan,
+      selectedProject,
+      selectedSubtitle,
+      selectedTranscript,
+    ]
+  );
+
+  const handleSaveShortProject = useCallback(async () => {
+    const record = buildCurrentShortProjectRecord("draft");
+    if (!record) {
+      toast.error("Select a clip and plan first.", {
+        className: "bg-amber-500/20 border-amber-500/50 text-amber-100",
+      });
+      return;
+    }
 
     try {
-      const result = await renderShort(payload);
-      toast.success(`Mock short package ready (${result.output.platform})`, {
+      await upsertProject(record);
+      setActiveSavedShortProjectId(record.id);
+      toast.success("Short editor configuration saved", {
         className: "bg-green-500/20 border-green-500/50 text-green-100",
       });
     } catch (error) {
       console.error(error);
+      toast.error("Failed to save short configuration", {
+        className: "bg-red-500/20 border-red-500/50 text-red-100",
+      });
+    }
+  }, [buildCurrentShortProjectRecord, upsertProject]);
+
+  const applySavedShortProject = useCallback((project: CreatorShortProjectRecord) => {
+    setActiveTool("clip_lab");
+    setActiveSavedShortProjectId(project.id);
+    setSelectedProjectId(project.sourceProjectId);
+    setSelectedTranscriptId(project.transcriptId);
+    setSelectedSubtitleId(project.subtitleId);
+    setSelectedClipId(project.clipId);
+    setSelectedPlanId(project.planId);
+
+    setTrimStartNudge(0);
+    setTrimEndNudge(0);
+    setZoom(project.editor.zoom);
+    setPanX(project.editor.panX);
+    setPanY(project.editor.panY);
+    setSubtitleScale(project.editor.subtitleScale);
+    setSubtitleXPositionPct(project.editor.subtitleXPositionPct ?? 50);
+    setSubtitleYOffsetPct(project.editor.subtitleYOffsetPct);
+    setShowSafeZones(project.editor.showSafeZones ?? true);
+  }, []);
+
+  const handleDownloadSavedExport = useCallback((record: CreatorShortExportRecord) => {
+    if (!record.fileBlob) {
+      toast.error("This export record does not have a saved file blob.", {
+        className: "bg-red-500/20 border-red-500/50 text-red-100",
+      });
+      return;
+    }
+    const url = URL.createObjectURL(record.fileBlob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = record.filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, []);
+
+  const handleRenderShort = async () => {
+    if (!selectedProject || !editedClip || !selectedPlan || !selectedTranscript || !selectedSubtitle) return;
+    if (!mediaFile) {
+      toast.error("Source media is unavailable. Reload the source file from history.", {
+        className: "bg-red-500/20 border-red-500/50 text-red-100",
+      });
+      return;
+    }
+    if (!isVideoMedia) {
+      toast.error("Local export currently requires a video source.", {
+        className: "bg-amber-500/20 border-amber-500/50 text-amber-100",
+      });
+      return;
+    }
+
+    setIsExportingShort(true);
+    setExportProgressPct(0);
+    setLocalRenderError(null);
+
+    let shortProjectRecord = buildCurrentShortProjectRecord("exporting");
+    if (!shortProjectRecord) {
+      setIsExportingShort(false);
+      return;
+    }
+
+    try {
+      await upsertProject(shortProjectRecord);
+      setActiveSavedShortProjectId(shortProjectRecord.id);
+
+      const sourceVideoSize = await readVideoDimensions(mediaFile, previewVideoRef.current);
+      const frameRect = previewFrameRef.current?.getBoundingClientRect();
+      const previewViewport = frameRect ? { width: frameRect.width, height: frameRect.height } : null;
+
+      const localExport = await exportShortVideoLocally({
+        sourceFile: mediaFile,
+        sourceFilename: mediaFilename || selectedProject.filename,
+        clip: editedClip,
+        plan: selectedPlan,
+        subtitleChunks: selectedClipSubtitleChunks,
+        editor: currentEditorState,
+        sourceVideoSize,
+        previewViewport,
+        onProgress: setExportProgressPct,
+      });
+
+      const exportRecord: CreatorShortExportRecord = {
+        id: makeId("shortexport"),
+        shortProjectId: shortProjectRecord.id,
+        sourceProjectId: selectedProject.id,
+        sourceFilename: mediaFilename || selectedProject.filename,
+        platform: selectedPlan.platform,
+        createdAt: Date.now(),
+        status: "completed",
+        filename: localExport.file.name,
+        mimeType: localExport.file.type || "video/mp4",
+        sizeBytes: localExport.file.size,
+        fileBlob: localExport.file,
+        debugFfmpegCommand: localExport.ffmpegCommandPreview,
+        debugNotes: localExport.notes,
+        clip: editedClip,
+        plan: selectedPlan,
+        editor: currentEditorState,
+      };
+
+      await upsertExport(exportRecord);
+
+      shortProjectRecord = {
+        ...shortProjectRecord,
+        status: "exported",
+        updatedAt: Date.now(),
+        lastExportId: exportRecord.id,
+        lastError: undefined,
+      };
+      await upsertProject(shortProjectRecord);
+
+      const renderResult: CreatorShortRenderResponse = {
+        ok: true,
+        providerMode: "local-browser",
+        jobId: exportRecord.id,
+        status: "completed",
+        createdAt: exportRecord.createdAt,
+        estimatedSeconds: 0,
+        output: {
+          platform: selectedPlan.platform,
+          filename: exportRecord.filename,
+          aspectRatio: "9:16",
+          resolution: "1080x1920",
+          subtitleBurnedIn: localExport.subtitleBurnedIn,
+        },
+        debugPreview: {
+          ffmpegCommandPreview: localExport.ffmpegCommandPreview,
+          notes: localExport.notes,
+        },
+      };
+      setLastRender(renderResult);
+
+      handleDownloadSavedExport(exportRecord);
+      toast.success(`Short exported and saved (${formatBytes(exportRecord.sizeBytes)})`, {
+        className: "bg-green-500/20 border-green-500/50 text-green-100",
+      });
+    } catch (error) {
+      console.error(error);
+      const message = error instanceof Error ? error.message : "Short export failed";
+      setLocalRenderError(message);
+
+      if (shortProjectRecord) {
+        try {
+          const failedProject: CreatorShortProjectRecord = {
+            ...shortProjectRecord,
+            status: "error",
+            updatedAt: Date.now(),
+            lastError: message,
+          };
+          await upsertProject(failedProject);
+        } catch (persistErr) {
+          console.error("Failed to persist short export error state", persistErr);
+        }
+      }
+
+      toast.error(message, {
+        className: "bg-red-500/20 border-red-500/50 text-red-100",
+      });
+    } finally {
+      setIsExportingShort(false);
     }
   };
 
   const previewSubtitleLine = useMemo(() => {
+    // While playing, sync subtitle to current playback time
+    if (isPlaying && selectedClipSubtitleChunks.length > 0 && editedClip) {
+      const matchingChunk = selectedClipSubtitleChunks.find((chunk) => {
+        const start = chunk.timestamp?.[0] ?? 0;
+        const end = chunk.timestamp?.[1] ?? start;
+        return currentTime >= start && currentTime <= end;
+      });
+      if (matchingChunk) {
+        return String(matchingChunk.text ?? "").trim().slice(0, 100);
+      }
+      return ""; // between chunks, show nothing
+    }
     if (!clipTextPreview) return "Add subtitles + punchy hook text";
     return clipTextPreview.split(/(?<=[.!?])\s+/)[0]?.slice(0, 80) || clipTextPreview.slice(0, 80);
-  }, [clipTextPreview]);
+  }, [clipTextPreview, currentTime, editedClip, isPlaying, selectedClipSubtitleChunks]);
+
+  const clipProgressPct = useMemo(() => {
+    if (!editedClip) return 0;
+    const elapsed = currentTime - editedClip.startSeconds;
+    const duration = editedClip.durationSeconds;
+    if (duration <= 0) return 0;
+    return Math.min(100, Math.max(0, (elapsed / duration) * 100));
+  }, [currentTime, editedClip]);
 
   return (
     <main className="min-h-screen w-full relative py-10 px-4 sm:px-6 lg:px-8">
@@ -458,7 +868,7 @@ export function CreatorHub() {
         <div className="absolute inset-0 opacity-15 [mask-image:radial-gradient(ellipse_70%_55%_at_50%_40%,#000_70%,transparent_100%)] bg-[linear-gradient(rgba(255,255,255,0.04)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.04)_1px,transparent_1px)] bg-[size:56px_56px]" />
       </div>
 
-      <div className="relative z-10 max-w-7xl mx-auto space-y-8">
+      <div className="relative z-10 max-w-[100rem] mx-auto space-y-8">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
           <div className="space-y-2">
             <div className="inline-flex items-center gap-2 rounded-full border border-cyan-300/20 bg-gradient-to-r from-cyan-400/10 to-orange-400/10 px-3 py-1.5 text-xs uppercase tracking-[0.22em] text-cyan-100/70">
@@ -757,9 +1167,9 @@ export function CreatorHub() {
           </Card>
         </div>
 
-        {analysis && (
+        {(analysis || activeTool === "clip_lab") && (
           <>
-            {activeTool === "video_info" && (
+            {activeTool === "video_info" && analysis && (
             <div className="grid grid-cols-1 xl:grid-cols-[1.25fr_0.95fr] gap-6 items-start">
               <Card className="bg-white/[0.03] border-white/10 text-white shadow-xl backdrop-blur-xl">
                 <CardHeader>
@@ -982,143 +1392,241 @@ export function CreatorHub() {
             )}
 
             {activeTool === "clip_lab" && (
-              <div className="grid grid-cols-1 xl:grid-cols-[1.05fr_1.35fr] gap-6 items-start">
-              <Card className="bg-white/[0.03] border-white/10 text-white shadow-xl backdrop-blur-xl">
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2"><Flame className="w-5 h-5 text-orange-300" /> Viral Clip Finder</CardTitle>
-                  <CardDescription className="text-white/50">Pick strong short-form moments to cut and package.</CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-3 max-h-[42rem] overflow-auto pr-1">
-                  {analysis.viralClips.map((clip) => {
-                    const isActive = selectedClip?.id === clip.id;
-                    const textPreview = selectedSubtitle ? summarizeClipText(clip, selectedSubtitle.chunks, 170) : clip.hook;
-                    return (
-                      <button
-                        key={clip.id}
-                        onClick={() => {
-                          setSelectedClipId(clip.id);
-                          setTrimStartNudge(0);
-                          setTrimEndNudge(0);
-                        }}
-                        className={`w-full text-left rounded-2xl border p-4 transition-colors ${
-                          isActive
-                            ? "border-orange-300/40 bg-orange-400/10"
-                            : "border-white/10 bg-black/20 hover:bg-black/30"
-                        }`}
-                      >
-                        <div className="flex items-center justify-between gap-3 mb-2">
-                          <div className="text-sm font-semibold text-white/90">{clip.title}</div>
-                          <div className="text-xs px-2 py-1 rounded-full bg-white/5 border border-white/10 text-orange-100">Score {clip.score}</div>
-                        </div>
-                        <div className="text-xs text-white/50 mb-2">
-                          {secondsToClock(clip.startSeconds)} → {secondsToClock(clip.endSeconds)} ({Math.round(clip.durationSeconds)}s)
-                        </div>
-                        <div className="text-sm text-white/80 leading-relaxed">{textPreview}</div>
-                        <div className="mt-2 text-xs text-white/55">{clip.reason}</div>
-                      </button>
-                    );
-                  })}
-                </CardContent>
-              </Card>
-
-              <div className="space-y-6">
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 items-start">
                 <Card className="bg-white/[0.03] border-white/10 text-white shadow-xl backdrop-blur-xl">
                   <CardHeader>
-                    <CardTitle className="flex items-center gap-2"><Scissors className="w-5 h-5 text-cyan-300" /> Shorts Planner</CardTitle>
-                    <CardDescription className="text-white/50">Platform-specific packaging generated from the selected viral clip.</CardDescription>
+                    <CardTitle className="flex items-center gap-2"><Flame className="w-5 h-5 text-orange-300" /> Viral Clip Finder</CardTitle>
+                    <CardDescription className="text-white/50">Pick strong short-form moments to cut and package.</CardDescription>
                   </CardHeader>
-                  <CardContent className="space-y-4">
-                    {!selectedClip ? (
-                      <div className="text-sm text-white/60">Select a viral clip to see shorts plans.</div>
+                  <CardContent className="space-y-3 max-h-[42rem] overflow-auto pr-1">
+                    {analysis?.viralClips?.length ? (
+                      analysis.viralClips.map((clip) => {
+                        const isActive = selectedClip?.id === clip.id;
+                        const textPreview = selectedSubtitle ? summarizeClipText(clip, selectedSubtitle.chunks, 170) : clip.hook;
+                        return (
+                          <button
+                            key={clip.id}
+                            onClick={() => {
+                              setActiveSavedShortProjectId("");
+                              setSelectedClipId(clip.id);
+                              setTrimStartNudge(0);
+                              setTrimEndNudge(0);
+                            }}
+                            className={`w-full text-left rounded-2xl border p-4 transition-colors ${
+                              isActive
+                                ? "border-orange-300/40 bg-orange-400/10"
+                                : "border-white/10 bg-black/20 hover:bg-black/30"
+                            }`}
+                          >
+                            <div className="flex items-center justify-between gap-3 mb-2">
+                              <div className="text-sm font-semibold text-white/90">{clip.title}</div>
+                              <div className="text-xs px-2 py-1 rounded-full bg-white/5 border border-white/10 text-orange-100">Score {clip.score}</div>
+                            </div>
+                            <div className="text-xs text-white/50 mb-2">
+                              {secondsToClock(clip.startSeconds)} → {secondsToClock(clip.endSeconds)} ({Math.round(clip.durationSeconds)}s)
+                            </div>
+                            <div className="text-sm text-white/80 leading-relaxed">{textPreview}</div>
+                            <div className="mt-2 text-xs text-white/55">{clip.reason}</div>
+                          </button>
+                        );
+                      })
                     ) : (
-                      <>
-                        <div className="rounded-xl border border-white/10 bg-black/20 p-4">
-                          <div className="text-xs uppercase tracking-wider text-white/50 mb-2">Selected Clip</div>
-                          <div className="text-sm text-white/90 font-semibold">
-                            {secondsToClock(selectedClip.startSeconds)} → {secondsToClock(selectedClip.endSeconds)} · {Math.round(selectedClip.durationSeconds)}s
-                          </div>
-                          <div className="text-sm text-white/75 mt-2 leading-relaxed">{clipTextPreview}</div>
-                        </div>
-
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                          {plansForSelectedClip.map((plan) => {
-                            const active = selectedPlan?.id === plan.id;
-                            return (
-                              <button
-                                key={plan.id}
-                                onClick={() => setSelectedPlanId(plan.id)}
-                                className={`text-left rounded-xl border p-3 transition-colors ${
-                                  active ? "border-cyan-300/40 bg-cyan-400/10" : "border-white/10 bg-black/20 hover:bg-black/30"
-                                }`}
-                              >
-                                <div className="text-sm font-semibold text-white/90">{platformLabel(plan.platform)}</div>
-                                <div className="text-xs text-white/60 mt-1">Style: {plan.subtitleStyle}</div>
-                                <div className="text-xs text-white/60">Hook: {plan.openingText.slice(0, 48)}</div>
-                              </button>
-                            );
-                          })}
-                        </div>
-
-                        {selectedPlan && (
-                          <div className="rounded-xl border border-white/10 bg-black/20 p-4 space-y-3">
-                            <div className="flex items-start justify-between gap-3">
-                              <div>
-                                <div className="text-sm font-semibold text-white/90">{selectedPlan.title}</div>
-                                <div className="text-xs text-white/50 mt-1">
-                                  {platformLabel(selectedPlan.platform)} • {selectedPlan.editorPreset.resolution} • {selectedPlan.editorPreset.aspectRatio}
-                                </div>
-                              </div>
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                className="text-white/70 hover:bg-white/10"
-                                onClick={() => copyText(selectedPlan.caption, "Short caption")}
-                              >
-                                <Copy className="w-4 h-4 mr-2" /> Caption
-                              </Button>
-                            </div>
-                            <div className="text-xs uppercase tracking-wider text-white/50">Caption</div>
-                            <textarea readOnly value={selectedPlan.caption} className="w-full h-24 rounded-lg border border-white/10 bg-white/5 p-2 text-xs text-white/80" />
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
-                              <div className="rounded-lg border border-white/10 bg-white/5 p-3">
-                                <div className="text-white/50 mb-1">Opening Text</div>
-                                <div className="text-white/90">{selectedPlan.openingText}</div>
-                              </div>
-                              <div className="rounded-lg border border-white/10 bg-white/5 p-3">
-                                <div className="text-white/50 mb-1">End Card</div>
-                                <div className="text-white/90">{selectedPlan.endCardText}</div>
-                              </div>
-                            </div>
-                          </div>
-                        )}
-                      </>
+                      <div className="rounded-xl border border-dashed border-white/15 bg-black/20 p-5 text-sm text-white/60">
+                        Run <span className="text-white">Generate Clip Lab</span> to populate viral clip candidates.
+                      </div>
                     )}
                   </CardContent>
                 </Card>
 
-                <Card className="bg-white/[0.03] border-white/10 text-white shadow-xl backdrop-blur-xl">
+                <div className="space-y-6">
+                  <Card className="bg-white/[0.03] border-white/10 text-white shadow-xl backdrop-blur-xl">
+                    <CardHeader>
+                      <CardTitle className="flex items-center gap-2"><Scissors className="w-5 h-5 text-cyan-300" /> Shorts Planner</CardTitle>
+                      <CardDescription className="text-white/50">Platform-specific packaging generated from the selected viral clip (or restored from a saved short).</CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                      {!selectedClip ? (
+                        <div className="text-sm text-white/60">Select a viral clip (or open a saved short) to configure the editor.</div>
+                      ) : (
+                        <>
+                          <div className="rounded-xl border border-white/10 bg-black/20 p-4">
+                            <div className="text-xs uppercase tracking-wider text-white/50 mb-2">Selected Clip</div>
+                            <div className="text-sm text-white/90 font-semibold">
+                              {secondsToClock(selectedClip.startSeconds)} → {secondsToClock(selectedClip.endSeconds)} · {Math.round(selectedClip.durationSeconds)}s
+                            </div>
+                            <div className="text-sm text-white/75 mt-2 leading-relaxed">{clipTextPreview || selectedClip.hook}</div>
+                          </div>
+
+                          {plansForSelectedClip.length > 0 ? (
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                              {plansForSelectedClip.map((plan) => {
+                                const active = selectedPlan?.id === plan.id;
+                                return (
+                                  <button
+                                    key={plan.id}
+                                    onClick={() => {
+                                      setActiveSavedShortProjectId("");
+                                      setSelectedPlanId(plan.id);
+                                    }}
+                                    className={`text-left rounded-xl border p-3 transition-colors ${
+                                      active ? "border-cyan-300/40 bg-cyan-400/10" : "border-white/10 bg-black/20 hover:bg-black/30"
+                                    }`}
+                                  >
+                                    <div className="text-sm font-semibold text-white/90">{platformLabel(plan.platform)}</div>
+                                    <div className="text-xs text-white/60 mt-1">Style: {plan.subtitleStyle}</div>
+                                    <div className="text-xs text-white/60">Hook: {plan.openingText.slice(0, 48)}</div>
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          ) : (
+                            <div className="text-sm text-white/55 rounded-xl border border-white/10 bg-black/20 p-4">
+                              No planner presets available for this clip in the current analysis. A restored saved short can still be exported.
+                            </div>
+                          )}
+
+                          {selectedPlan && (
+                            <div className="rounded-xl border border-white/10 bg-black/20 p-4 space-y-3">
+                              <div className="flex items-start justify-between gap-3">
+                                <div>
+                                  <div className="text-sm font-semibold text-white/90">{selectedPlan.title}</div>
+                                  <div className="text-xs text-white/50 mt-1">
+                                    {platformLabel(selectedPlan.platform)} • {selectedPlan.editorPreset.resolution} • {selectedPlan.editorPreset.aspectRatio}
+                                  </div>
+                                </div>
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  className="text-white/70 hover:bg-white/10"
+                                  onClick={() => copyText(selectedPlan.caption, "Short caption")}
+                                >
+                                  <Copy className="w-4 h-4 mr-2" /> Caption
+                                </Button>
+                              </div>
+                              <div className="text-xs uppercase tracking-wider text-white/50">Caption</div>
+                              <textarea readOnly value={selectedPlan.caption} className="w-full h-24 rounded-lg border border-white/10 bg-white/5 p-2 text-xs text-white/80" />
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </CardContent>
+                  </Card>
+
+                  <Card className="bg-white/[0.03] border-white/10 text-white shadow-xl backdrop-blur-xl">
+                    <CardHeader>
+                      <CardTitle className="flex items-center gap-2"><FolderOpen className="w-5 h-5 text-emerald-300" /> Saved Shorts Lifecycle</CardTitle>
+                      <CardDescription className="text-white/50">
+                        Saved editor configurations and exported MP4 files for this source project.
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                      {shortsLibraryError && (
+                        <div className="text-xs text-red-300 bg-red-500/10 border border-red-500/20 rounded-lg p-2">{shortsLibraryError}</div>
+                      )}
+                      {isLoadingShortsLibrary && (
+                        <div className="text-sm text-white/50">Loading saved shorts…</div>
+                      )}
+                      {!isLoadingShortsLibrary && savedShortProjects.length === 0 && (
+                        <div className="rounded-xl border border-dashed border-white/15 bg-black/20 p-4 text-sm text-white/60">
+                          No saved shorts yet. Save the current editor configuration or export a short to start the lifecycle.
+                        </div>
+                      )}
+
+                      {savedShortProjects.map((project) => {
+                        const isActive = activeSavedShortProjectId === project.id;
+                        const exportCount = (exportsByProjectId.get(project.id) ?? []).length;
+                        return (
+                          <div
+                            key={project.id}
+                            className={cn(
+                              "rounded-xl border p-3",
+                              isActive ? "border-emerald-300/40 bg-emerald-400/10" : "border-white/10 bg-black/20"
+                            )}
+                          >
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="min-w-0">
+                                <div className="text-sm font-semibold text-white/90 truncate">{project.name}</div>
+                                <div className="text-xs text-white/55 mt-1">
+                                  {platformLabel(project.platform)} · {secondsToClock(project.clip.startSeconds)} → {secondsToClock(project.clip.endSeconds)}
+                                </div>
+                                <div className="text-xs text-white/45 mt-1">
+                                  {new Date(project.updatedAt).toLocaleString()} · {project.status} · {exportCount} export{exportCount === 1 ? "" : "s"}
+                                </div>
+                                {project.lastError && (
+                                  <div className="text-xs text-red-300/90 mt-2">{project.lastError}</div>
+                                )}
+                              </div>
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                className="text-white/80 hover:bg-white/10"
+                                onClick={() => applySavedShortProject(project)}
+                              >
+                                <FolderOpen className="w-4 h-4 mr-2" /> Open
+                              </Button>
+                            </div>
+
+                            {isActive && (exportsByProjectId.get(project.id)?.length ?? 0) > 0 && (
+                              <div className="mt-3 space-y-2">
+                                {(exportsByProjectId.get(project.id) ?? []).slice(0, 3).map((exp) => (
+                                  <div key={exp.id} className="rounded-lg border border-white/10 bg-white/5 p-2 flex items-center justify-between gap-3">
+                                    <div className="min-w-0">
+                                      <div className="text-xs text-white/85 truncate">{exp.filename}</div>
+                                      <div className="text-[11px] text-white/50">{new Date(exp.createdAt).toLocaleString()} · {formatBytes(exp.sizeBytes)}</div>
+                                    </div>
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      className="text-white/75 hover:bg-white/10"
+                                      onClick={() => handleDownloadSavedExport(exp)}
+                                    >
+                                      <Download className="w-3.5 h-3.5 mr-1.5" /> Download
+                                    </Button>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </CardContent>
+                  </Card>
+                </div>
+
+                <Card className="bg-white/[0.03] border-white/10 text-white shadow-xl backdrop-blur-xl xl:col-span-2">
                   <CardHeader>
-                    <CardTitle className="flex items-center gap-2"><Clapperboard className="w-5 h-5 text-fuchsia-300" /> Vertical Editor (Preview + Mock Render)</CardTitle>
+                    <CardTitle className="flex items-center gap-2"><Clapperboard className="w-5 h-5 text-fuchsia-300" /> Vertical Editor + Export</CardTitle>
                     <CardDescription className="text-white/50">
-                      Frame the selected clip for vertical and preview subtitle placement. Render endpoint currently returns a mock export package.
+                      Full-width editor for framing and subtitle placement. Exports are rendered locally in the browser and saved in your shorts lifecycle.
                     </CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-5">
-                    <div className="grid grid-cols-1 2xl:grid-cols-[320px_1fr] gap-5">
+                    <div className="grid grid-cols-1 2xl:grid-cols-[420px_1fr] gap-5">
                       <div className="space-y-3">
-                        <div className="relative mx-auto w-full max-w-[320px] aspect-[9/16] rounded-[1.6rem] border border-white/15 overflow-hidden bg-black shadow-2xl">
+                        <div
+                          ref={previewFrameRef}
+                          className="relative mx-auto w-full max-w-[420px] aspect-[9/16] rounded-[1.6rem] border border-white/15 overflow-hidden bg-black shadow-2xl"
+                        >
                           {isVideoMedia && mediaUrl ? (
                             <video
                               key={mediaUrl}
                               ref={previewVideoRef}
                               src={mediaUrl}
                               muted
-                              loop
                               playsInline
-                              autoPlay
-                              className="absolute inset-0 w-full h-full object-cover"
+                              onTimeUpdate={handleVideoTimeUpdate}
+                              onPlay={handleVideoPlay}
+                              onPause={handleVideoPause}
+                              onEnded={handleVideoEnded}
+                              className="absolute"
                               style={{
-                                transform: `translate(${panX}px, ${panY}px) scale(${zoom})`,
+                                minWidth: "100%",
+                                minHeight: "100%",
+                                width: "auto",
+                                height: "auto",
+                                left: "50%",
+                                top: "50%",
+                                transform: `translate(calc(-50% + ${panX}px), calc(-50% + ${panY}px)) scale(${zoom})`,
                                 transformOrigin: "center center",
                               }}
                             />
@@ -1127,7 +1635,7 @@ export function CreatorHub() {
                               <div>
                                 <div className="text-xs uppercase tracking-[0.2em] text-white/40 mb-2">Preview Placeholder</div>
                                 <div className="text-sm text-white/70 leading-relaxed">
-                                  {mediaFilename ? `Audio-only source: ${mediaFilename}` : "No video preview available. You can still plan cuts and export settings."}
+                                  {mediaFilename ? `Audio-only source: ${mediaFilename}` : "No video preview available. You can still save editor presets for later."}
                                 </div>
                               </div>
                             </div>
@@ -1146,14 +1654,71 @@ export function CreatorHub() {
                             </>
                           )}
 
-                          <div
-                            className="absolute left-1/2 -translate-x-1/2 w-[88%] px-3 py-2 rounded-xl bg-black/55 border border-white/10 text-center"
-                            style={{ top: `${subtitleYOffsetPct}%`, transform: `translate(-50%, -50%) scale(${subtitleScale})` }}
-                          >
-                            <div className={`text-sm leading-tight ${selectedPlan ? subtitleStyleClass(selectedPlan.subtitleStyle) : "text-white font-semibold"}`}>
-                              {previewSubtitleLine}
+                          {previewSubtitleLine && (
+                            <div
+                              className="absolute w-[88%] px-3 py-2 rounded-xl bg-black/55 border border-white/10 text-center transition-opacity duration-150"
+                              style={{
+                                left: `${subtitleXPositionPct}%`,
+                                top: `${subtitleYOffsetPct}%`,
+                                transform: `translate(-50%, -50%) scale(${subtitleScale})`,
+                              }}
+                            >
+                              <div className={`text-sm leading-tight ${selectedPlan ? subtitleStyleClass(selectedPlan.subtitleStyle) : "text-white font-semibold"}`}>
+                                {previewSubtitleLine}
+                              </div>
                             </div>
-                          </div>
+                          )}
+
+                          {/* Playback controls overlay at bottom of frame */}
+                          {isVideoMedia && mediaUrl && (
+                            <div className="absolute bottom-0 inset-x-0 bg-gradient-to-t from-black/80 via-black/40 to-transparent pt-8 pb-3 px-3">
+                              {/* Seek bar */}
+                              <div
+                                className="h-1 rounded-full bg-white/20 mb-2.5 cursor-pointer"
+                                onClick={(e) => {
+                                  if (!editedClip) return;
+                                  const rect = e.currentTarget.getBoundingClientRect();
+                                  const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+                                  const seekTime = editedClip.startSeconds + pct * editedClip.durationSeconds;
+                                  const video = previewVideoRef.current;
+                                  if (video) {
+                                    video.currentTime = seekTime;
+                                    setCurrentTime(seekTime);
+                                  }
+                                }}
+                              >
+                                <div
+                                  className="h-full rounded-full bg-gradient-to-r from-fuchsia-400 to-cyan-300 transition-[width] duration-100"
+                                  style={{ width: `${clipProgressPct}%` }}
+                                />
+                              </div>
+                              <div className="flex items-center justify-between gap-2">
+                                <div className="flex items-center gap-1.5">
+                                  <button
+                                    type="button"
+                                    onClick={togglePlayPause}
+                                    className="p-1.5 rounded-full bg-white/10 hover:bg-white/20 transition-colors"
+                                    aria-label={isPlaying ? "Pause" : "Play"}
+                                  >
+                                    {isPlaying ? <Pause className="w-4 h-4 text-white" /> : <Play className="w-4 h-4 text-white" />}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={toggleMute}
+                                    className="p-1.5 rounded-full bg-white/10 hover:bg-white/20 transition-colors"
+                                    aria-label={isMuted ? "Unmute" : "Mute"}
+                                  >
+                                    {isMuted ? <VolumeX className="w-4 h-4 text-white/70" /> : <Volume2 className="w-4 h-4 text-white" />}
+                                  </button>
+                                </div>
+                                {editedClip && (
+                                  <div className="text-[11px] text-white/60 tabular-nums">
+                                    {secondsToClock(Math.max(0, currentTime - editedClip.startSeconds))} / {secondsToClock(editedClip.durationSeconds)}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          )}
                         </div>
 
                         {editedClip && (
@@ -1162,45 +1727,82 @@ export function CreatorHub() {
                             <div>Duration: {editedClip.durationSeconds.toFixed(1)}s</div>
                             <div>Subtitle source: {selectedSubtitle ? subtitleVersionLabel(selectedSubtitle) : "None"}</div>
                             <div>Subtitle chunks in clip: {selectedClipSubtitleChunks.length}</div>
+                            {activeSavedShortProject && (
+                              <div className="text-emerald-200/90">Loaded saved short: {activeSavedShortProject.name}</div>
+                            )}
                           </div>
                         )}
                       </div>
 
                       <div className="space-y-4">
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
                           <div className="rounded-xl border border-white/10 bg-black/20 p-4 space-y-3">
                             <div className="text-xs uppercase tracking-wider text-white/50">Trim + Framing</div>
                             <label className="text-xs text-white/70 block">Start nudge: {trimStartNudge.toFixed(1)}s</label>
-                            <input type="range" min={-3} max={3} step={0.1} value={trimStartNudge} onChange={(e) => setTrimStartNudge(Number(e.target.value))} className="w-full" />
+                            <input type="range" min={-10} max={10} step={0.1} value={trimStartNudge} onChange={(e) => setTrimStartNudge(Number(e.target.value))} className="w-full" />
                             <label className="text-xs text-white/70 block">End nudge: {trimEndNudge.toFixed(1)}s</label>
-                            <input type="range" min={-3} max={3} step={0.1} value={trimEndNudge} onChange={(e) => setTrimEndNudge(Number(e.target.value))} className="w-full" />
+                            <input type="range" min={-10} max={10} step={0.1} value={trimEndNudge} onChange={(e) => setTrimEndNudge(Number(e.target.value))} className="w-full" />
                             <label className="text-xs text-white/70 block">Zoom: {zoom.toFixed(2)}x</label>
-                            <input type="range" min={0.8} max={2.2} step={0.01} value={zoom} onChange={(e) => setZoom(Number(e.target.value))} className="w-full" />
+                            <input type="range" min={0.5} max={4.0} step={0.01} value={zoom} onChange={(e) => setZoom(Number(e.target.value))} className="w-full" />
                             <label className="text-xs text-white/70 block">Pan X: {panX}px</label>
-                            <input type="range" min={-220} max={220} step={1} value={panX} onChange={(e) => setPanX(Number(e.target.value))} className="w-full" />
+                            <input type="range" min={-600} max={600} step={1} value={panX} onChange={(e) => setPanX(Number(e.target.value))} className="w-full" />
                             <label className="text-xs text-white/70 block">Pan Y: {panY}px</label>
-                            <input type="range" min={-220} max={220} step={1} value={panY} onChange={(e) => setPanY(Number(e.target.value))} className="w-full" />
+                            <input type="range" min={-600} max={600} step={1} value={panY} onChange={(e) => setPanY(Number(e.target.value))} className="w-full" />
                           </div>
 
                           <div className="rounded-xl border border-white/10 bg-black/20 p-4 space-y-3">
-                            <div className="text-xs uppercase tracking-wider text-white/50">Subtitles + Export</div>
+                            <div className="text-xs uppercase tracking-wider text-white/50">Subtitles</div>
                             <label className="text-xs text-white/70 block">Subtitle scale: {subtitleScale.toFixed(2)}x</label>
-                            <input type="range" min={0.7} max={1.6} step={0.01} value={subtitleScale} onChange={(e) => setSubtitleScale(Number(e.target.value))} className="w-full" />
+                            <input type="range" min={0.7} max={1.8} step={0.01} value={subtitleScale} onChange={(e) => setSubtitleScale(Number(e.target.value))} className="w-full" />
+                            <label className="text-xs text-white/70 block">Subtitle horizontal position: {subtitleXPositionPct.toFixed(0)}%</label>
+                            <input type="range" min={10} max={90} step={1} value={subtitleXPositionPct} onChange={(e) => setSubtitleXPositionPct(Number(e.target.value))} className="w-full" />
                             <label className="text-xs text-white/70 block">Subtitle vertical position: {subtitleYOffsetPct.toFixed(0)}%</label>
-                            <input type="range" min={58} max={90} step={1} value={subtitleYOffsetPct} onChange={(e) => setSubtitleYOffsetPct(Number(e.target.value))} className="w-full" />
+                            <input type="range" min={45} max={92} step={1} value={subtitleYOffsetPct} onChange={(e) => setSubtitleYOffsetPct(Number(e.target.value))} className="w-full" />
                             <label className="flex items-center gap-2 text-xs text-white/70 mt-2">
                               <input type="checkbox" checked={showSafeZones} onChange={(e) => setShowSafeZones(e.target.checked)} />
                               Show platform safe zones
                             </label>
+                          </div>
 
+                          <div className="rounded-xl border border-white/10 bg-black/20 p-4 space-y-3">
+                            <div className="text-xs uppercase tracking-wider text-white/50">Save + Export</div>
+                            <div className="text-xs text-white/60 leading-relaxed">
+                              Export creates an MP4 locally in the browser, stores the file blob + editor configuration in IndexedDB, and downloads it immediately.
+                            </div>
+                            {!isVideoMedia && mediaFilename && (
+                              <div className="text-xs text-amber-200/90 bg-amber-500/10 border border-amber-500/20 rounded-lg p-2 flex items-start gap-2">
+                                <TriangleAlert className="w-4 h-4 mt-0.5 shrink-0" />
+                                Current source is audio-only. Save config is available, local MP4 export needs a video source.
+                              </div>
+                            )}
+                            {!canRender && !isExportingShort && (
+                              <div className="text-xs text-white/50 bg-white/5 border border-white/10 rounded-lg p-2">
+                                {!selectedClip && !selectedPlan
+                                  ? "Select a clip and plan to enable save and export."
+                                  : !selectedClip
+                                    ? "Select a clip first."
+                                    : !selectedPlan
+                                      ? "Select a plan first."
+                                      : "Missing transcript or subtitle data."}
+                              </div>
+                            )}
                             <div className="pt-2 flex flex-wrap gap-2">
                               <Button
+                                onClick={handleSaveShortProject}
+                                disabled={!canRender || isExportingShort}
+                                variant="ghost"
+                                className="bg-white/5 hover:bg-white/10 text-white/90"
+                              >
+                                <Save className="w-4 h-4 mr-2" />
+                                Save Short Config
+                              </Button>
+                              <Button
                                 onClick={handleRenderShort}
-                                disabled={!canRender || isRendering}
+                                disabled={!canExportVideo || isExportingShort}
                                 className="bg-gradient-to-r from-fuchsia-500 to-cyan-400 text-black font-semibold hover:from-fuchsia-400 hover:to-cyan-300"
                               >
-                                {isRendering ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Play className="w-4 h-4 mr-2" />}
-                                Mock Render Short
+                                {isExportingShort ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <HardDriveDownload className="w-4 h-4 mr-2" />}
+                                {isExportingShort ? `Exporting ${exportProgressPct}%` : "Export Short (Local)"}
                               </Button>
                               <Button
                                 variant="ghost"
@@ -1212,13 +1814,27 @@ export function CreatorHub() {
                                   setPanX(0);
                                   setPanY(0);
                                   setSubtitleScale(1);
+                                  setSubtitleXPositionPct(50);
                                   setSubtitleYOffsetPct(78);
+                                  setShowSafeZones(true);
+                                  setActiveSavedShortProjectId("");
                                 }}
                               >
                                 Reset Editor
                               </Button>
                             </div>
-                            {renderError && <div className="text-xs text-red-300 bg-red-500/10 border border-red-500/20 rounded-lg p-2">{renderError}</div>}
+                            {isExportingShort && (
+                              <div className="space-y-2">
+                                <div className="h-2 rounded-full bg-white/10 overflow-hidden">
+                                  <div
+                                    className="h-full bg-gradient-to-r from-fuchsia-400 to-cyan-300 transition-[width] duration-150"
+                                    style={{ width: `${Math.max(4, exportProgressPct)}%` }}
+                                  />
+                                </div>
+                                <div className="text-xs text-white/55">Local ffmpeg.wasm export in progress… keep this tab open.</div>
+                              </div>
+                            )}
+                            {localRenderError && <div className="text-xs text-red-300 bg-red-500/10 border border-red-500/20 rounded-lg p-2">{localRenderError}</div>}
                           </div>
                         </div>
 
@@ -1226,8 +1842,13 @@ export function CreatorHub() {
                           <div className="rounded-xl border border-white/10 bg-black/20 p-4 space-y-3">
                             <div className="flex flex-wrap items-center justify-between gap-2">
                               <div>
-                                <div className="text-sm font-semibold text-white/90">Mock Export Package</div>
-                                <div className="text-xs text-white/50">Job {lastRender.jobId} · {lastRender.status}</div>
+                                <div className="text-sm font-semibold text-white/90 flex items-center gap-2">
+                                  <CheckCircle2 className="w-4 h-4 text-emerald-300" />
+                                  Last Export Package
+                                </div>
+                                <div className="text-xs text-white/50">
+                                  Job {lastRender.jobId} · {lastRender.status} · {lastRender.providerMode}
+                                </div>
                               </div>
                               <Button
                                 size="sm"
@@ -1258,12 +1879,47 @@ export function CreatorHub() {
                             </pre>
                           </div>
                         )}
+
+                        {activeSavedShortProject && savedExportsForActiveShort.length > 0 && (
+                          <div className="rounded-xl border border-white/10 bg-black/20 p-4 space-y-3">
+                            <div className="text-sm font-semibold text-white/90">Saved Exports for Active Short</div>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                              {savedExportsForActiveShort.map((exp) => (
+                                <div key={exp.id} className="rounded-lg border border-white/10 bg-white/5 p-3 space-y-2">
+                                  <div className="text-xs text-white/90 break-all">{exp.filename}</div>
+                                  <div className="text-[11px] text-white/50">
+                                    {new Date(exp.createdAt).toLocaleString()} · {formatBytes(exp.sizeBytes)} · {exp.status}
+                                  </div>
+                                  <div className="flex gap-2">
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      className="text-white/80 hover:bg-white/10"
+                                      onClick={() => handleDownloadSavedExport(exp)}
+                                    >
+                                      <Download className="w-4 h-4 mr-2" /> Download MP4
+                                    </Button>
+                                    {exp.debugFfmpegCommand && (
+                                      <Button
+                                        size="sm"
+                                        variant="ghost"
+                                        className="text-white/70 hover:bg-white/10"
+                                        onClick={() => copyText(exp.debugFfmpegCommand?.join(" ") ?? "", "Saved FFmpeg command")}
+                                      >
+                                        <Copy className="w-4 h-4 mr-2" /> Cmd
+                                      </Button>
+                                    )}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
                       </div>
                     </div>
                   </CardContent>
                 </Card>
               </div>
-            </div>
             )}
           </>
         )}

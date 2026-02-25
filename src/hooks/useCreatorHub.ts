@@ -74,6 +74,7 @@ export function useCreatorHub() {
     analyzeError,
     analyze,
     lastRender,
+    setLastRender,
     isRendering,
     renderError,
     renderShort,
