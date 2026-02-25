@@ -133,7 +133,7 @@ export default function Home() {
               <Link href="/creator">
                 <Button variant="outline" className="rounded-full bg-cyan-400/10 border-cyan-300/20 text-cyan-100 hover:text-white hover:bg-cyan-300/15">
                   <Sparkles className="w-4 h-4 mr-2" />
-                  Creator Tools
+                  Creator Hub
                 </Button>
               </Link>
               <Link href="/history">

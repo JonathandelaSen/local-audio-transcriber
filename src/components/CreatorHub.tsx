@@ -44,6 +44,7 @@ import {
   type SubtitleVersion,
 } from "@/lib/history";
 import {
+  clamp,
   secondsToClock,
   type CreatorAnalyzeRequest,
   type CreatorShortEditorState,
@@ -110,6 +111,53 @@ function platformLabel(platform: CreatorShortPlan["platform"]): string {
   if (platform === "youtube_shorts") return "YouTube Shorts";
   if (platform === "instagram_reels") return "Instagram Reels";
   return "TikTok";
+}
+
+function createManualFallbackClip(options: {
+  sourceDurationSeconds?: number;
+  subtitleLanguage?: string;
+}): CreatorViralClip {
+  const maxDuration = typeof options.sourceDurationSeconds === "number" && Number.isFinite(options.sourceDurationSeconds)
+    ? Math.max(1, Number(options.sourceDurationSeconds.toFixed(2)))
+    : undefined;
+  const endSeconds = maxDuration ? Math.min(maxDuration, 60) : 60;
+
+  return {
+    id: "manual_clip_fallback",
+    startSeconds: 0,
+    endSeconds,
+    durationSeconds: Number((endSeconds - 0).toFixed(2)),
+    score: 0,
+    title: "Manual Clip (No Clip Lab)",
+    hook: "Edit this source manually without generating clip suggestions first.",
+    reason: "Fallback clip created so the editor can be used immediately.",
+    punchline: "Manual short edit",
+    sourceChunkIndexes: [],
+    suggestedSubtitleLanguage: options.subtitleLanguage || "en",
+    platforms: ["youtube_shorts", "instagram_reels", "tiktok"],
+  };
+}
+
+function createManualFallbackPlan(clipId: string): CreatorShortPlan {
+  return {
+    id: "manual_plan_fallback",
+    clipId,
+    platform: "youtube_shorts",
+    title: "Manual Edit Preset",
+    caption: "",
+    subtitleStyle: "clean_caption",
+    openingText: "Manual short cut",
+    endCardText: "Follow for more",
+    editorPreset: {
+      platform: "youtube_shorts",
+      aspectRatio: "9:16",
+      resolution: "1080x1920",
+      subtitleStyle: "clean_caption",
+      safeTopPct: 12,
+      safeBottomPct: 14,
+      targetDurationRange: [15, 60],
+    },
+  };
 }
 
 function subtitleStyleClass(style: CreatorShortPlan["subtitleStyle"]): string {
@@ -232,7 +280,14 @@ function toggleBlock(list: CreatorVideoInfoBlock[], block: CreatorVideoInfoBlock
   return list.includes(block) ? list.filter((value) => value !== block) : [...list, block];
 }
 
-export function CreatorHub() {
+type CreatorToolMode = "video_info" | "clip_lab";
+
+type CreatorHubProps = {
+  initialTool?: CreatorToolMode;
+  lockedTool?: CreatorToolMode;
+};
+
+export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHubProps = {}) {
   const { history, isLoading: isLoadingHistory, error: historyError, refresh } = useHistoryLibrary();
   const {
     analysis,
@@ -250,7 +305,7 @@ export function CreatorHub() {
   const [niche, setNiche] = useState("creator tools / workflow");
   const [audience, setAudience] = useState("content creators and social media teams");
   const [tone, setTone] = useState("sharp, practical, growth-oriented");
-  const [activeTool, setActiveTool] = useState<"video_info" | "clip_lab">("video_info");
+  const [activeTool, setActiveTool] = useState<CreatorToolMode>(lockedTool ?? initialTool);
   const [videoInfoBlocks, setVideoInfoBlocks] = useState<CreatorVideoInfoBlock[]>([
     "titleIdeas",
     "description",
@@ -275,6 +330,11 @@ export function CreatorHub() {
   const [isExportingShort, setIsExportingShort] = useState(false);
   const [exportProgressPct, setExportProgressPct] = useState(0);
   const [localRenderError, setLocalRenderError] = useState<string | null>(null);
+  const [shortProjectNameDraft, setShortProjectNameDraft] = useState("");
+
+  const isToolLocked = !!lockedTool;
+  const isVideoInfoPage = lockedTool === "video_info";
+  const isShortsPage = lockedTool === "clip_lab";
 
   const [mediaUrl, setMediaUrl] = useState<string | null>(null);
   const [mediaFilename, setMediaFilename] = useState<string | null>(null);
@@ -285,6 +345,12 @@ export function CreatorHub() {
   const [currentTime, setCurrentTime] = useState(0);
   const previewVideoRef = useRef<HTMLVideoElement | null>(null);
   const previewFrameRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (lockedTool && activeTool !== lockedTool) {
+      setActiveTool(lockedTool);
+    }
+  }, [activeTool, lockedTool]);
 
   const selectedProject = useMemo(() => {
     if (!history.length) return undefined;
@@ -338,6 +404,24 @@ export function CreatorHub() {
     return getSubtitleById(selectedTranscript, effectiveSubtitleId) ?? subtitleOptions[0];
   }, [effectiveSubtitleId, selectedTranscript, subtitleOptions]);
 
+  const sourceDurationSeconds = useMemo(() => {
+    if (!selectedProject || !selectedTranscript) return undefined;
+    return getTranscriptDurationSeconds(selectedProject, selectedTranscript.id);
+  }, [selectedProject, selectedTranscript]);
+
+  const manualFallbackClip = useMemo(() => {
+    if (!selectedProject || !selectedTranscript || !selectedSubtitle) return undefined;
+    return createManualFallbackClip({
+      sourceDurationSeconds,
+      subtitleLanguage: selectedSubtitle.language || selectedTranscript.detectedLanguage || selectedTranscript.requestedLanguage,
+    });
+  }, [selectedProject, selectedSubtitle, selectedTranscript, sourceDurationSeconds]);
+
+  const manualFallbackPlan = useMemo(() => {
+    if (!manualFallbackClip) return undefined;
+    return createManualFallbackPlan(manualFallbackClip.id);
+  }, [manualFallbackClip]);
+
   useEffect(() => {
     let objectUrl: string | null = null;
     let cancelled = false;
@@ -390,6 +474,7 @@ export function CreatorHub() {
     setLocalRenderError(null);
     setExportProgressPct(0);
     setIsPlaying(false);
+    setShortProjectNameDraft("");
   }, [selectedProject?.id]);
 
   // Video event callbacks — attached as JSX props on the <video>, no effect needed
@@ -407,11 +492,16 @@ export function CreatorHub() {
   }, [activeSavedShortProjectId, savedShortProjects]);
 
   const selectedClip = useMemo(() => {
-    if (analysis?.viralClips?.length) {
-      return analysis.viralClips.find((clip) => clip.id === selectedClipId) ?? analysis.viralClips[0];
+    const analysisClips = analysis?.viralClips ?? [];
+    if (selectedClipId) {
+      const fromAnalysis = analysisClips.find((clip) => clip.id === selectedClipId);
+      if (fromAnalysis) return fromAnalysis;
+      if (activeSavedShortProject?.clipId === selectedClipId) return activeSavedShortProject.clip;
+      if (manualFallbackClip?.id === selectedClipId) return manualFallbackClip;
     }
-    return activeSavedShortProject?.clip;
-  }, [activeSavedShortProject?.clip, analysis, selectedClipId]);
+    if (analysisClips.length) return analysisClips[0];
+    return activeSavedShortProject?.clip ?? manualFallbackClip;
+  }, [activeSavedShortProject, analysis, manualFallbackClip, selectedClipId]);
 
   const plansForSelectedClip = useMemo(() => {
     if (analysis?.shortsPlans?.length && selectedClip) {
@@ -421,15 +511,18 @@ export function CreatorHub() {
     if (activeSavedShortProject?.plan && activeSavedShortProject.plan.clipId === selectedClip?.id) {
       return [activeSavedShortProject.plan];
     }
+    if (manualFallbackPlan && selectedClip?.id === manualFallbackPlan.clipId) {
+      return [manualFallbackPlan];
+    }
     return [];
-  }, [activeSavedShortProject?.plan, analysis, selectedClip]);
+  }, [activeSavedShortProject?.plan, analysis, manualFallbackPlan, selectedClip]);
 
   const selectedPlan = useMemo(() => {
     if (plansForSelectedClip.length) {
       return plansForSelectedClip.find((plan) => plan.id === selectedPlanId) ?? plansForSelectedClip[0];
     }
-    return activeSavedShortProject?.plan;
-  }, [activeSavedShortProject?.plan, plansForSelectedClip, selectedPlanId]);
+    return activeSavedShortProject?.plan ?? manualFallbackPlan;
+  }, [activeSavedShortProject?.plan, manualFallbackPlan, plansForSelectedClip, selectedPlanId]);
 
   const clipTextPreview = useMemo(() => {
     if (!selectedClip || !selectedSubtitle) return "";
@@ -438,15 +531,22 @@ export function CreatorHub() {
 
   const editedClip = useMemo(() => {
     if (!selectedClip) return undefined;
-    const start = Math.max(0, Number((selectedClip.startSeconds + trimStartNudge).toFixed(2)));
-    const end = Math.max(start + 1, Number((selectedClip.endSeconds + trimEndNudge).toFixed(2)));
+    const maxClipEnd = typeof sourceDurationSeconds === "number" && Number.isFinite(sourceDurationSeconds)
+      ? Math.max(1, Number(sourceDurationSeconds.toFixed(2)))
+      : Number.POSITIVE_INFINITY;
+    const maxClipStart = Number.isFinite(maxClipEnd) ? Math.max(0, maxClipEnd - 1) : Number.POSITIVE_INFINITY;
+
+    const start = Number(clamp(Number((selectedClip.startSeconds + trimStartNudge).toFixed(2)), 0, maxClipStart).toFixed(2));
+    const unclampedEnd = Number((selectedClip.endSeconds + trimEndNudge).toFixed(2));
+    const minEnd = Number((start + 1).toFixed(2));
+    const end = Number(clamp(Math.max(minEnd, unclampedEnd), minEnd, maxClipEnd).toFixed(2));
     return {
       ...selectedClip,
       startSeconds: start,
       endSeconds: end,
       durationSeconds: Number((end - start).toFixed(2)),
     };
-  }, [selectedClip, trimEndNudge, trimStartNudge]);
+  }, [selectedClip, sourceDurationSeconds, trimEndNudge, trimStartNudge]);
 
   useEffect(() => {
     if (!activeSavedShortProject || !selectedClip) return;
@@ -465,7 +565,7 @@ export function CreatorHub() {
     if (!video || !editedClip) return;
     video.currentTime = editedClip.startSeconds;
     setCurrentTime(editedClip.startSeconds);
-  }, [editedClip?.startSeconds, editedClip?.id, mediaUrl]);
+  }, [editedClip, mediaUrl]);
 
   // Enforce clip boundaries during playback
   useEffect(() => {
@@ -513,6 +613,50 @@ export function CreatorHub() {
       showSafeZones,
     }),
     [panX, panY, showSafeZones, subtitleScale, subtitleXPositionPct, subtitleYOffsetPct, zoom]
+  );
+
+  useEffect(() => {
+    if (!activeSavedShortProject) return;
+    setShortProjectNameDraft(activeSavedShortProject.name || "");
+  }, [activeSavedShortProject]);
+
+  const autoGeneratedShortProjectName = useMemo(() => {
+    if (!editedClip || !selectedPlan) return "";
+    return `${platformLabel(selectedPlan.platform)} • ${secondsToClock(editedClip.startSeconds)}-${secondsToClock(editedClip.endSeconds)}`;
+  }, [editedClip, selectedPlan]);
+
+  const setEditedClipStartSeconds = useCallback(
+    (nextStartSeconds: number) => {
+      if (!selectedClip || !Number.isFinite(nextStartSeconds)) return;
+      setTrimStartNudge(Number((nextStartSeconds - selectedClip.startSeconds).toFixed(2)));
+      setActiveSavedShortProjectId("");
+    },
+    [selectedClip]
+  );
+
+  const setEditedClipEndSeconds = useCallback(
+    (nextEndSeconds: number) => {
+      if (!selectedClip || !Number.isFinite(nextEndSeconds)) return;
+      setTrimEndNudge(Number((nextEndSeconds - selectedClip.endSeconds).toFixed(2)));
+      setActiveSavedShortProjectId("");
+    },
+    [selectedClip]
+  );
+
+  const setEditedClipDurationSeconds = useCallback(
+    (nextDurationSeconds: number) => {
+      if (!editedClip || !Number.isFinite(nextDurationSeconds)) return;
+      setEditedClipEndSeconds(editedClip.startSeconds + nextDurationSeconds);
+    },
+    [editedClip, setEditedClipEndSeconds]
+  );
+
+  const adjustEditedClipDurationSeconds = useCallback(
+    (deltaSeconds: number) => {
+      if (!editedClip || !Number.isFinite(deltaSeconds)) return;
+      setEditedClipDurationSeconds(editedClip.durationSeconds + deltaSeconds);
+    },
+    [editedClip, setEditedClipDurationSeconds]
   );
 
   const savedExportsForActiveShort = useMemo(
@@ -612,6 +756,7 @@ export function CreatorHub() {
         );
 
       const now = Date.now();
+      const explicitShortName = shortProjectNameDraft.trim();
       return {
         id: existing?.id ?? makeId("shortproj"),
         sourceProjectId: selectedProject.id,
@@ -623,7 +768,8 @@ export function CreatorHub() {
         planId: selectedPlan.id,
         platform: selectedPlan.platform,
         name:
-          existing?.name ??
+          explicitShortName ||
+          existing?.name ||
           `${platformLabel(selectedPlan.platform)} • ${secondsToClock(editedClip.startSeconds)}-${secondsToClock(editedClip.endSeconds)}`,
         clip: editedClip,
         plan: selectedPlan,
@@ -642,15 +788,18 @@ export function CreatorHub() {
       savedShortProjects,
       selectedPlan,
       selectedProject,
+      shortProjectNameDraft,
       selectedSubtitle,
       selectedTranscript,
     ]
   );
 
   const handleSaveShortProject = useCallback(async () => {
-    const record = buildCurrentShortProjectRecord("draft");
+    const record = buildCurrentShortProjectRecord("draft", {
+      id: activeSavedShortProjectId || undefined,
+    });
     if (!record) {
-      toast.error("Select a clip and plan first.", {
+      toast.error("Select a source with transcript + subtitles to save a short config.", {
         className: "bg-amber-500/20 border-amber-500/50 text-amber-100",
       });
       return;
@@ -659,6 +808,7 @@ export function CreatorHub() {
     try {
       await upsertProject(record);
       setActiveSavedShortProjectId(record.id);
+      setShortProjectNameDraft(record.name);
       toast.success("Short editor configuration saved", {
         className: "bg-green-500/20 border-green-500/50 text-green-100",
       });
@@ -668,7 +818,7 @@ export function CreatorHub() {
         className: "bg-red-500/20 border-red-500/50 text-red-100",
       });
     }
-  }, [buildCurrentShortProjectRecord, upsertProject]);
+  }, [activeSavedShortProjectId, buildCurrentShortProjectRecord, upsertProject]);
 
   const applySavedShortProject = useCallback((project: CreatorShortProjectRecord) => {
     setActiveTool("clip_lab");
@@ -678,6 +828,7 @@ export function CreatorHub() {
     setSelectedSubtitleId(project.subtitleId);
     setSelectedClipId(project.clipId);
     setSelectedPlanId(project.planId);
+    setShortProjectNameDraft(project.name || "");
 
     setTrimStartNudge(0);
     setTrimEndNudge(0);
@@ -726,7 +877,9 @@ export function CreatorHub() {
     setExportProgressPct(0);
     setLocalRenderError(null);
 
-    let shortProjectRecord = buildCurrentShortProjectRecord("exporting");
+    let shortProjectRecord = buildCurrentShortProjectRecord("exporting", {
+      id: activeSavedShortProjectId || undefined,
+    });
     if (!shortProjectRecord) {
       setIsExportingShort(false);
       return;
@@ -735,6 +888,7 @@ export function CreatorHub() {
     try {
       await upsertProject(shortProjectRecord);
       setActiveSavedShortProjectId(shortProjectRecord.id);
+      setShortProjectNameDraft(shortProjectRecord.name);
 
       const sourceVideoSize = await readVideoDimensions(mediaFile, previewVideoRef.current);
       const frameRect = previewFrameRef.current?.getBoundingClientRect();
@@ -859,29 +1013,121 @@ export function CreatorHub() {
     return Math.min(100, Math.max(0, (elapsed / duration) * 100));
   }, [currentTime, editedClip]);
 
+  const topBadgeLabel = isVideoInfoPage ? "Video Info Studio" : isShortsPage ? "Shorts Forge" : "Creator Tool Bench";
+  const pageHeading = isVideoInfoPage ? "Packaging Lab" : isShortsPage ? "Shorts Forge" : "Content Engine";
+  const pageDescription = isVideoInfoPage
+    ? "Generate long-form titles, descriptions, chapters, hooks, and SEO blocks on a dedicated page. No clip tools mixed in."
+    : isShortsPage
+      ? "Cut, frame, preview, save, and export vertical shorts on a dedicated page. This workspace is focused on clip production only."
+      : "Use your transcript as a source asset. Run only the tool you need: video info generation or clip lab + vertical editor.";
+
   return (
-    <main className="min-h-screen w-full relative py-10 px-4 sm:px-6 lg:px-8">
+    <main
+      className={cn(
+        "min-h-screen w-full relative py-10 px-4 sm:px-6 lg:px-8",
+        isVideoInfoPage && "bg-[radial-gradient(circle_at_20%_10%,rgba(16,185,129,0.12),transparent_40%),radial-gradient(circle_at_85%_15%,rgba(34,211,238,0.15),transparent_45%),#06090a]",
+        isShortsPage && "bg-[radial-gradient(circle_at_12%_8%,rgba(244,114,182,0.14),transparent_40%),radial-gradient(circle_at_88%_12%,rgba(251,146,60,0.16),transparent_45%),#090607]"
+      )}
+    >
       <div className="fixed inset-0 pointer-events-none">
-        <div className="absolute -top-20 left-[6%] w-[34rem] h-[34rem] rounded-full bg-cyan-500/10 blur-[120px]" />
-        <div className="absolute top-[35%] right-[4%] w-[28rem] h-[28rem] rounded-full bg-orange-500/10 blur-[130px]" />
-        <div className="absolute bottom-[-6rem] left-[32%] w-[32rem] h-[32rem] rounded-full bg-emerald-500/5 blur-[150px]" />
-        <div className="absolute inset-0 opacity-15 [mask-image:radial-gradient(ellipse_70%_55%_at_50%_40%,#000_70%,transparent_100%)] bg-[linear-gradient(rgba(255,255,255,0.04)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.04)_1px,transparent_1px)] bg-[size:56px_56px]" />
+        <div
+          className={cn(
+            "absolute -top-20 left-[6%] w-[34rem] h-[34rem] rounded-full blur-[120px]",
+            isVideoInfoPage ? "bg-emerald-400/14" : isShortsPage ? "bg-fuchsia-500/14" : "bg-cyan-500/10"
+          )}
+        />
+        <div
+          className={cn(
+            "absolute top-[35%] right-[4%] w-[28rem] h-[28rem] rounded-full blur-[130px]",
+            isVideoInfoPage ? "bg-cyan-400/12" : isShortsPage ? "bg-orange-500/14" : "bg-orange-500/10"
+          )}
+        />
+        <div
+          className={cn(
+            "absolute bottom-[-6rem] left-[32%] w-[32rem] h-[32rem] rounded-full blur-[150px]",
+            isVideoInfoPage ? "bg-teal-300/8" : isShortsPage ? "bg-rose-400/8" : "bg-emerald-500/5"
+          )}
+        />
+        <div
+          className={cn(
+            "absolute inset-0 opacity-15 [mask-image:radial-gradient(ellipse_70%_55%_at_50%_40%,#000_70%,transparent_100%)]",
+            isShortsPage
+              ? "bg-[linear-gradient(rgba(255,255,255,0.03)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.03)_1px,transparent_1px)] bg-[size:44px_44px]"
+              : "bg-[linear-gradient(rgba(255,255,255,0.04)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.04)_1px,transparent_1px)] bg-[size:56px_56px]"
+          )}
+        />
       </div>
 
       <div className="relative z-10 max-w-[100rem] mx-auto space-y-8">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
           <div className="space-y-2">
-            <div className="inline-flex items-center gap-2 rounded-full border border-cyan-300/20 bg-gradient-to-r from-cyan-400/10 to-orange-400/10 px-3 py-1.5 text-xs uppercase tracking-[0.22em] text-cyan-100/70">
-              <Rocket className="w-3.5 h-3.5" /> Creator Tool Bench
+            <div
+              className={cn(
+                "inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-xs uppercase tracking-[0.22em]",
+                isVideoInfoPage
+                  ? "border border-emerald-300/25 bg-gradient-to-r from-emerald-400/10 to-cyan-400/10 text-emerald-100/80"
+                  : isShortsPage
+                    ? "border border-orange-300/25 bg-gradient-to-r from-orange-400/10 to-fuchsia-400/10 text-orange-100/80"
+                    : "border border-cyan-300/20 bg-gradient-to-r from-cyan-400/10 to-orange-400/10 text-cyan-100/70"
+              )}
+            >
+              <Rocket className="w-3.5 h-3.5" /> {topBadgeLabel}
             </div>
-            <h1 className="text-4xl md:text-5xl font-black tracking-tight text-transparent bg-clip-text bg-gradient-to-r from-cyan-200 via-white to-orange-200">
-              Content Engine
+            <h1
+              className={cn(
+                "text-4xl md:text-5xl font-black tracking-tight text-transparent bg-clip-text",
+                isVideoInfoPage
+                  ? "bg-gradient-to-r from-emerald-200 via-cyan-100 to-white"
+                  : isShortsPage
+                    ? "bg-gradient-to-r from-orange-200 via-rose-100 to-fuchsia-200"
+                    : "bg-gradient-to-r from-cyan-200 via-white to-orange-200"
+              )}
+            >
+              {pageHeading}
             </h1>
             <p className="text-white/60 max-w-3xl">
-              Use your transcript as a source asset. Run only the tool you need: video info generation or clip lab + vertical editor.
+              {pageDescription}
             </p>
           </div>
           <div className="flex items-center gap-2">
+            {isToolLocked && (
+              <Link href="/creator">
+                <Button
+                  variant="ghost"
+                  className={cn(
+                    "text-white/85 border",
+                    isVideoInfoPage
+                      ? "bg-emerald-400/8 border-emerald-300/20 hover:bg-emerald-300/12"
+                      : "bg-orange-400/8 border-orange-300/20 hover:bg-orange-300/12"
+                  )}
+                >
+                  <Sparkles className="w-4 h-4 mr-2" /> Tool Hub
+                </Button>
+              </Link>
+            )}
+            {isToolLocked && (
+              <Link href={isVideoInfoPage ? "/creator/shorts" : "/creator/video-info"}>
+                <Button
+                  variant="ghost"
+                  className={cn(
+                    "text-white/85 border",
+                    isVideoInfoPage
+                      ? "bg-white/5 border-cyan-300/20 hover:bg-cyan-400/10"
+                      : "bg-white/5 border-fuchsia-300/20 hover:bg-fuchsia-400/10"
+                  )}
+                >
+                  {isVideoInfoPage ? (
+                    <>
+                      <Clapperboard className="w-4 h-4 mr-2" /> Shorts Page
+                    </>
+                  ) : (
+                    <>
+                      <Lightbulb className="w-4 h-4 mr-2" /> Info Page
+                    </>
+                  )}
+                </Button>
+              </Link>
+            )}
             <Link href="/">
               <Button variant="ghost" className="bg-white/5 hover:bg-white/10 text-white/80">
                 <ArrowLeft className="w-4 h-4 mr-2" /> Home
@@ -902,7 +1148,11 @@ export function CreatorHub() {
                 <FileVideo className="w-5 h-5 text-cyan-300" /> Source + Tool Controls
               </CardTitle>
               <CardDescription className="text-white/50">
-                Pick the transcript/subtitle source once, then run either tool independently. Video info supports scoped output blocks.
+                {isToolLocked
+                  ? isVideoInfoPage
+                    ? "Select a transcript/subtitle source and generate only packaging outputs on this page. Use the hub to switch into shorts production."
+                    : "Select a transcript/subtitle source and run clip discovery/shorts workflows on this page. Packaging generation lives on its own page."
+                  : "Pick the transcript/subtitle source once, then run either tool independently. Video info supports scoped output blocks."}
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -1000,40 +1250,55 @@ export function CreatorHub() {
                 </div>
 
                 <div className="rounded-xl border border-white/10 bg-black/20 p-4 space-y-4">
-                  <div className="flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setActiveTool("video_info")}
+                  {!isToolLocked && (
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setActiveTool("video_info")}
+                        className={cn(
+                          "rounded-xl border px-3 py-2 text-left transition-colors",
+                          activeTool === "video_info"
+                            ? "border-cyan-300/40 bg-cyan-400/10 text-cyan-100"
+                            : "border-white/10 bg-white/5 text-white/70 hover:bg-white/10"
+                        )}
+                      >
+                        <div className="flex items-center gap-2 text-sm font-semibold">
+                          <Lightbulb className="w-4 h-4" />
+                          Video Info Generator
+                        </div>
+                        <div className="text-xs opacity-80 mt-1">Titles, description, hashtags, chapters, content notes, insights</div>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setActiveTool("clip_lab")}
+                        className={cn(
+                          "rounded-xl border px-3 py-2 text-left transition-colors",
+                          activeTool === "clip_lab"
+                            ? "border-orange-300/40 bg-orange-400/10 text-orange-100"
+                            : "border-white/10 bg-white/5 text-white/70 hover:bg-white/10"
+                        )}
+                      >
+                        <div className="flex items-center gap-2 text-sm font-semibold">
+                          <Flame className="w-4 h-4" />
+                          Clip Lab + Editor
+                        </div>
+                        <div className="text-xs opacity-80 mt-1">Viral clips, shorts plans, vertical framing, mock render</div>
+                      </button>
+                    </div>
+                  )}
+
+                  {isToolLocked && (
+                    <div
                       className={cn(
-                        "rounded-xl border px-3 py-2 text-left transition-colors",
-                        activeTool === "video_info"
-                          ? "border-cyan-300/40 bg-cyan-400/10 text-cyan-100"
-                          : "border-white/10 bg-white/5 text-white/70 hover:bg-white/10"
+                        "rounded-xl border p-3 text-sm",
+                        isVideoInfoPage
+                          ? "border-emerald-300/20 bg-emerald-400/5 text-emerald-100/85"
+                          : "border-orange-300/20 bg-orange-400/5 text-orange-100/85"
                       )}
                     >
-                      <div className="flex items-center gap-2 text-sm font-semibold">
-                        <Lightbulb className="w-4 h-4" />
-                        Video Info Generator
-                      </div>
-                      <div className="text-xs opacity-80 mt-1">Titles, description, hashtags, chapters, content notes, insights</div>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setActiveTool("clip_lab")}
-                      className={cn(
-                        "rounded-xl border px-3 py-2 text-left transition-colors",
-                        activeTool === "clip_lab"
-                          ? "border-orange-300/40 bg-orange-400/10 text-orange-100"
-                          : "border-white/10 bg-white/5 text-white/70 hover:bg-white/10"
-                      )}
-                    >
-                      <div className="flex items-center gap-2 text-sm font-semibold">
-                        <Flame className="w-4 h-4" />
-                        Clip Lab + Editor
-                      </div>
-                      <div className="text-xs opacity-80 mt-1">Viral clips, shorts plans, vertical framing, mock render</div>
-                    </button>
-                  </div>
+                      Dedicated workspace mode. The other tool is now a separate page in the creator hub.
+                    </div>
+                  )}
 
                   {activeTool === "video_info" && (
                     <div className="space-y-3">
@@ -1114,57 +1379,141 @@ export function CreatorHub() {
             </CardContent>
           </Card>
 
-          <Card className="bg-gradient-to-br from-cyan-500/10 via-white/[0.03] to-orange-500/10 border-white/10 text-white shadow-2xl backdrop-blur-xl overflow-hidden">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Sparkles className="w-5 h-5 text-orange-300" /> Tool Split (Token-Aware Workflow)
-              </CardTitle>
-              <CardDescription className="text-white/50">
-                Run only the generation path you need. Video info mode supports scoped blocks so you can skip pinned comments, hashtags, or insights when not needed.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
-                <button
-                  type="button"
-                  onClick={() => setActiveTool("video_info")}
-                  className={cn(
-                    "rounded-2xl border p-4 text-left transition-colors",
-                    activeTool === "video_info"
-                      ? "border-cyan-300/35 bg-cyan-400/8 shadow-[0_0_25px_rgba(34,211,238,0.12)]"
-                      : "border-white/10 bg-black/20 hover:bg-black/25"
+          {isToolLocked ? (
+            <Card
+              className={cn(
+                "border-white/10 text-white shadow-2xl backdrop-blur-xl overflow-hidden",
+                isVideoInfoPage
+                  ? "bg-gradient-to-br from-emerald-500/10 via-cyan-500/6 to-white/[0.03]"
+                  : "bg-gradient-to-br from-orange-500/10 via-fuchsia-500/6 to-white/[0.03]"
+              )}
+            >
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  {isVideoInfoPage ? (
+                    <>
+                      <Lightbulb className="w-5 h-5 text-emerald-300" /> Packaging-Only Workspace
+                    </>
+                  ) : (
+                    <>
+                      <Clapperboard className="w-5 h-5 text-orange-300" /> Shorts-Only Workspace
+                    </>
                   )}
-                >
-                  <div className="font-semibold text-white mb-1 flex items-center gap-2">
-                    <Lightbulb className="w-4 h-4 text-cyan-300" /> Video Info Generator
+                </CardTitle>
+                <CardDescription className="text-white/50">
+                  {isVideoInfoPage
+                    ? "This page is optimized for transcript-to-packaging generation. Clip discovery, editing, and export are intentionally moved out."
+                    : "This page is optimized for short-form production. Long-form title/description/SEO generation is intentionally moved out."}
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+                  <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
+                    <div className="text-xs uppercase tracking-[0.18em] text-white/45 mb-2">What lives here</div>
+                    <ul className="space-y-2 text-white/75">
+                      {isVideoInfoPage ? (
+                        <>
+                          <li>• Title ideas, descriptions, chapters, hashtags, hooks</li>
+                          <li>• Content pack summaries and repurpose prompts</li>
+                          <li>• Transcript-level insights without clip generation</li>
+                        </>
+                      ) : (
+                        <>
+                          <li>• Viral clip finder + platform shorts planner</li>
+                          <li>• Vertical framing, subtitle positioning, save/export</li>
+                          <li>• Saved shorts lifecycle and local MP4 render history</li>
+                        </>
+                      )}
+                    </ul>
                   </div>
-                  <div className="text-white/60">
-                    Generate selected long-form packaging blocks only: titles, description, hashtags, pinned comment, thumbnail hooks, chapters, content notes, insights.
+                  <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
+                    <div className="text-xs uppercase tracking-[0.18em] text-white/45 mb-2">Navigation</div>
+                    <div className="space-y-3 text-white/75">
+                      <p>Use the creator hub to jump between tool pages without mixing controls or results in one workspace.</p>
+                      <div className="flex flex-wrap gap-2">
+                        <Link href="/creator">
+                          <Button variant="ghost" className="bg-white/5 hover:bg-white/10 text-white/85">
+                            <Sparkles className="w-4 h-4 mr-2" /> Hub
+                          </Button>
+                        </Link>
+                        <Link href={isVideoInfoPage ? "/creator/shorts" : "/creator/video-info"}>
+                          <Button
+                            variant="ghost"
+                            className={cn(
+                              "text-white/85",
+                              isVideoInfoPage ? "bg-cyan-400/10 hover:bg-cyan-400/15" : "bg-fuchsia-400/10 hover:bg-fuchsia-400/15"
+                            )}
+                          >
+                            {isVideoInfoPage ? (
+                              <>
+                                <Clapperboard className="w-4 h-4 mr-2" /> Shorts
+                              </>
+                            ) : (
+                              <>
+                                <Lightbulb className="w-4 h-4 mr-2" /> Video Info
+                              </>
+                            )}
+                          </Button>
+                        </Link>
+                      </div>
+                    </div>
                   </div>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setActiveTool("clip_lab")}
-                  className={cn(
-                    "rounded-2xl border p-4 text-left transition-colors",
-                    activeTool === "clip_lab"
-                      ? "border-orange-300/35 bg-orange-400/8 shadow-[0_0_25px_rgba(251,146,60,0.12)]"
-                      : "border-white/10 bg-black/20 hover:bg-black/25"
-                  )}
-                >
-                  <div className="font-semibold text-white mb-1 flex items-center gap-2">
-                    <Clapperboard className="w-4 h-4 text-orange-300" /> Clip Lab + Editor
-                  </div>
-                  <div className="text-white/60">
-                    Find viral moments, inspect shorts plans, then frame and mock-render a vertical cut from the selected clip.
-                  </div>
-                </button>
-              </div>
-              <div className="rounded-xl border border-white/10 bg-black/20 p-4 text-sm text-white/70">
-                Tip: use <span className="text-white">Video Info Generator</span> for cheap packaging passes and switch to <span className="text-white">Clip Lab + Editor</span> only when you are ready to cut short-form outputs.
-              </div>
-            </CardContent>
-          </Card>
+                </div>
+              </CardContent>
+            </Card>
+          ) : (
+            <Card className="bg-gradient-to-br from-cyan-500/10 via-white/[0.03] to-orange-500/10 border-white/10 text-white shadow-2xl backdrop-blur-xl overflow-hidden">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Sparkles className="w-5 h-5 text-orange-300" /> Tool Split (Token-Aware Workflow)
+                </CardTitle>
+                <CardDescription className="text-white/50">
+                  Run only the generation path you need. Video info mode supports scoped blocks so you can skip pinned comments, hashtags, or insights when not needed.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+                  <button
+                    type="button"
+                    onClick={() => setActiveTool("video_info")}
+                    className={cn(
+                      "rounded-2xl border p-4 text-left transition-colors",
+                      activeTool === "video_info"
+                        ? "border-cyan-300/35 bg-cyan-400/8 shadow-[0_0_25px_rgba(34,211,238,0.12)]"
+                        : "border-white/10 bg-black/20 hover:bg-black/25"
+                    )}
+                  >
+                    <div className="font-semibold text-white mb-1 flex items-center gap-2">
+                      <Lightbulb className="w-4 h-4 text-cyan-300" /> Video Info Generator
+                    </div>
+                    <div className="text-white/60">
+                      Generate selected long-form packaging blocks only: titles, description, hashtags, pinned comment, thumbnail hooks, chapters, content notes, insights.
+                    </div>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTool("clip_lab")}
+                    className={cn(
+                      "rounded-2xl border p-4 text-left transition-colors",
+                      activeTool === "clip_lab"
+                        ? "border-orange-300/35 bg-orange-400/8 shadow-[0_0_25px_rgba(251,146,60,0.12)]"
+                        : "border-white/10 bg-black/20 hover:bg-black/25"
+                    )}
+                  >
+                    <div className="font-semibold text-white mb-1 flex items-center gap-2">
+                      <Clapperboard className="w-4 h-4 text-orange-300" /> Clip Lab + Editor
+                    </div>
+                    <div className="text-white/60">
+                      Find viral moments, inspect shorts plans, then frame and mock-render a vertical cut from the selected clip.
+                    </div>
+                  </button>
+                </div>
+                <div className="rounded-xl border border-white/10 bg-black/20 p-4 text-sm text-white/70">
+                  Tip: use <span className="text-white">Video Info Generator</span> for cheap packaging passes and switch to <span className="text-white">Clip Lab + Editor</span> only when you are ready to cut short-form outputs.
+                </div>
+              </CardContent>
+            </Card>
+          )}
         </div>
 
         {(analysis || activeTool === "clip_lab") && (
@@ -1396,7 +1745,7 @@ export function CreatorHub() {
                 <Card className="bg-white/[0.03] border-white/10 text-white shadow-xl backdrop-blur-xl">
                   <CardHeader>
                     <CardTitle className="flex items-center gap-2"><Flame className="w-5 h-5 text-orange-300" /> Viral Clip Finder</CardTitle>
-                    <CardDescription className="text-white/50">Pick strong short-form moments to cut and package.</CardDescription>
+                    <CardDescription className="text-white/50">Pick strong short-form moments to cut and package, or skip this and edit manually below.</CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-3 max-h-[42rem] overflow-auto pr-1">
                     {analysis?.viralClips?.length ? (
@@ -1409,6 +1758,7 @@ export function CreatorHub() {
                             onClick={() => {
                               setActiveSavedShortProjectId("");
                               setSelectedClipId(clip.id);
+                              setShortProjectNameDraft("");
                               setTrimStartNudge(0);
                               setTrimEndNudge(0);
                             }}
@@ -1432,7 +1782,7 @@ export function CreatorHub() {
                       })
                     ) : (
                       <div className="rounded-xl border border-dashed border-white/15 bg-black/20 p-5 text-sm text-white/60">
-                        Run <span className="text-white">Generate Clip Lab</span> to populate viral clip candidates.
+                        Run <span className="text-white">Generate Clip Lab</span> to populate viral clip candidates, or use the manual editor preset below without generating clips.
                       </div>
                     )}
                   </CardContent>
@@ -1440,17 +1790,24 @@ export function CreatorHub() {
 
                 <div className="space-y-6">
                   <Card className="bg-white/[0.03] border-white/10 text-white shadow-xl backdrop-blur-xl">
-                    <CardHeader>
+                  <CardHeader>
                       <CardTitle className="flex items-center gap-2"><Scissors className="w-5 h-5 text-cyan-300" /> Shorts Planner</CardTitle>
-                      <CardDescription className="text-white/50">Platform-specific packaging generated from the selected viral clip (or restored from a saved short).</CardDescription>
+                      <CardDescription className="text-white/50">Platform-specific packaging from a selected viral clip, a restored saved short, or the manual fallback preset.</CardDescription>
                     </CardHeader>
                     <CardContent className="space-y-4">
                       {!selectedClip ? (
-                        <div className="text-sm text-white/60">Select a viral clip (or open a saved short) to configure the editor.</div>
+                        <div className="text-sm text-white/60">Select a source project/transcript/subtitles to unlock manual editing, or open a saved short.</div>
                       ) : (
                         <>
                           <div className="rounded-xl border border-white/10 bg-black/20 p-4">
-                            <div className="text-xs uppercase tracking-wider text-white/50 mb-2">Selected Clip</div>
+                            <div className="flex items-center justify-between gap-2 mb-2">
+                              <div className="text-xs uppercase tracking-wider text-white/50">Selected Clip</div>
+                              {manualFallbackClip && selectedClip.id === manualFallbackClip.id && (
+                                <div className="text-[11px] px-2 py-1 rounded-full border border-cyan-300/20 bg-cyan-400/5 text-cyan-100">
+                                  Manual mode
+                                </div>
+                              )}
+                            </div>
                             <div className="text-sm text-white/90 font-semibold">
                               {secondsToClock(selectedClip.startSeconds)} → {secondsToClock(selectedClip.endSeconds)} · {Math.round(selectedClip.durationSeconds)}s
                             </div>
@@ -1467,6 +1824,7 @@ export function CreatorHub() {
                                     onClick={() => {
                                       setActiveSavedShortProjectId("");
                                       setSelectedPlanId(plan.id);
+                                      setShortProjectNameDraft("");
                                     }}
                                     className={`text-left rounded-xl border p-3 transition-colors ${
                                       active ? "border-cyan-300/40 bg-cyan-400/10" : "border-white/10 bg-black/20 hover:bg-black/30"
@@ -1560,9 +1918,10 @@ export function CreatorHub() {
                                 size="sm"
                                 variant="ghost"
                                 className="text-white/80 hover:bg-white/10"
+                                title="Load saved short into editor"
                                 onClick={() => applySavedShortProject(project)}
                               >
-                                <FolderOpen className="w-4 h-4 mr-2" /> Open
+                                <FolderOpen className="w-4 h-4 mr-2" /> Load
                               </Button>
                             </div>
 
@@ -1738,10 +2097,100 @@ export function CreatorHub() {
                         <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
                           <div className="rounded-xl border border-white/10 bg-black/20 p-4 space-y-3">
                             <div className="text-xs uppercase tracking-wider text-white/50">Trim + Framing</div>
+                            {editedClip && (
+                              <div className="rounded-lg border border-white/10 bg-white/5 p-2.5 space-y-2">
+                                <div className="grid grid-cols-3 gap-2">
+                                  <label className="text-[11px] text-white/55">
+                                    Start (s)
+                                    <input
+                                      type="number"
+                                      min={0}
+                                      step={0.1}
+                                      value={editedClip.startSeconds}
+                                      onChange={(e) => {
+                                        const value = Number(e.target.value);
+                                        if (!Number.isFinite(value)) return;
+                                        setEditedClipStartSeconds(value);
+                                      }}
+                                      className="mt-1 w-full rounded-md border border-white/10 bg-black/30 px-2 py-1 text-xs text-white"
+                                    />
+                                  </label>
+                                  <label className="text-[11px] text-white/55">
+                                    End (s)
+                                    <input
+                                      type="number"
+                                      min={1}
+                                      step={0.1}
+                                      value={editedClip.endSeconds}
+                                      onChange={(e) => {
+                                        const value = Number(e.target.value);
+                                        if (!Number.isFinite(value)) return;
+                                        setEditedClipEndSeconds(value);
+                                      }}
+                                      className="mt-1 w-full rounded-md border border-white/10 bg-black/30 px-2 py-1 text-xs text-white"
+                                    />
+                                  </label>
+                                  <label className="text-[11px] text-white/55">
+                                    Duration (s)
+                                    <input
+                                      type="number"
+                                      min={1}
+                                      step={0.1}
+                                      value={editedClip.durationSeconds}
+                                      onChange={(e) => {
+                                        const value = Number(e.target.value);
+                                        if (!Number.isFinite(value)) return;
+                                        setEditedClipDurationSeconds(value);
+                                      }}
+                                      className="mt-1 w-full rounded-md border border-white/10 bg-black/30 px-2 py-1 text-xs text-white"
+                                    />
+                                  </label>
+                                </div>
+                                <div className="flex flex-wrap gap-1.5">
+                                  <Button type="button" size="sm" variant="ghost" className="h-7 px-2 text-xs bg-white/5 hover:bg-white/10 text-white/80" onClick={() => adjustEditedClipDurationSeconds(-5)}>
+                                    -5s
+                                  </Button>
+                                  <Button type="button" size="sm" variant="ghost" className="h-7 px-2 text-xs bg-white/5 hover:bg-white/10 text-white/80" onClick={() => adjustEditedClipDurationSeconds(-1)}>
+                                    -1s
+                                  </Button>
+                                  <Button type="button" size="sm" variant="ghost" className="h-7 px-2 text-xs bg-white/5 hover:bg-white/10 text-white/80" onClick={() => adjustEditedClipDurationSeconds(1)}>
+                                    +1s
+                                  </Button>
+                                  <Button type="button" size="sm" variant="ghost" className="h-7 px-2 text-xs bg-white/5 hover:bg-white/10 text-white/80" onClick={() => adjustEditedClipDurationSeconds(5)}>
+                                    +5s
+                                  </Button>
+                                </div>
+                                {typeof sourceDurationSeconds === "number" && Number.isFinite(sourceDurationSeconds) && (
+                                  <div className="text-[11px] text-white/45">Source duration: {sourceDurationSeconds.toFixed(1)}s (trim is clamped to this length)</div>
+                                )}
+                              </div>
+                            )}
                             <label className="text-xs text-white/70 block">Start nudge: {trimStartNudge.toFixed(1)}s</label>
-                            <input type="range" min={-10} max={10} step={0.1} value={trimStartNudge} onChange={(e) => setTrimStartNudge(Number(e.target.value))} className="w-full" />
+                            <input
+                              type="range"
+                              min={-300}
+                              max={300}
+                              step={0.1}
+                              value={trimStartNudge}
+                              onChange={(e) => {
+                                setTrimStartNudge(Number(e.target.value));
+                                setActiveSavedShortProjectId("");
+                              }}
+                              className="w-full"
+                            />
                             <label className="text-xs text-white/70 block">End nudge: {trimEndNudge.toFixed(1)}s</label>
-                            <input type="range" min={-10} max={10} step={0.1} value={trimEndNudge} onChange={(e) => setTrimEndNudge(Number(e.target.value))} className="w-full" />
+                            <input
+                              type="range"
+                              min={-300}
+                              max={300}
+                              step={0.1}
+                              value={trimEndNudge}
+                              onChange={(e) => {
+                                setTrimEndNudge(Number(e.target.value));
+                                setActiveSavedShortProjectId("");
+                              }}
+                              className="w-full"
+                            />
                             <label className="text-xs text-white/70 block">Zoom: {zoom.toFixed(2)}x</label>
                             <input type="range" min={0.5} max={4.0} step={0.01} value={zoom} onChange={(e) => setZoom(Number(e.target.value))} className="w-full" />
                             <label className="text-xs text-white/70 block">Pan X: {panX}px</label>
@@ -1769,6 +2218,33 @@ export function CreatorHub() {
                             <div className="text-xs text-white/60 leading-relaxed">
                               Export creates an MP4 locally in the browser, stores the file blob + editor configuration in IndexedDB, and downloads it immediately.
                             </div>
+                            <div className="space-y-2">
+                              <label className="text-xs text-white/70 block">
+                                Saved short name
+                                <input
+                                  type="text"
+                                  value={shortProjectNameDraft}
+                                  onChange={(e) => setShortProjectNameDraft(e.target.value)}
+                                  placeholder={autoGeneratedShortProjectName || "Auto-generated on save"}
+                                  className="mt-1 w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-white placeholder:text-white/35"
+                                />
+                              </label>
+                              <div className="flex items-center justify-between gap-2">
+                                <div className="text-[11px] text-white/45">
+                                  Load a saved short, change this name, then click <span className="text-white/75">Save Short Config</span> to rename it.
+                                </div>
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="ghost"
+                                  className="h-7 px-2 text-xs bg-white/5 hover:bg-white/10 text-white/80"
+                                  onClick={() => setShortProjectNameDraft("")}
+                                  disabled={!shortProjectNameDraft.trim()}
+                                >
+                                  Auto Name
+                                </Button>
+                              </div>
+                            </div>
                             {!isVideoMedia && mediaFilename && (
                               <div className="text-xs text-amber-200/90 bg-amber-500/10 border border-amber-500/20 rounded-lg p-2 flex items-start gap-2">
                                 <TriangleAlert className="w-4 h-4 mt-0.5 shrink-0" />
@@ -1777,13 +2253,9 @@ export function CreatorHub() {
                             )}
                             {!canRender && !isExportingShort && (
                               <div className="text-xs text-white/50 bg-white/5 border border-white/10 rounded-lg p-2">
-                                {!selectedClip && !selectedPlan
-                                  ? "Select a clip and plan to enable save and export."
-                                  : !selectedClip
-                                    ? "Select a clip first."
-                                    : !selectedPlan
-                                      ? "Select a plan first."
-                                      : "Missing transcript or subtitle data."}
+                                {selectedProject && (!selectedTranscript || !selectedSubtitle)
+                                  ? "Select a transcript + subtitle source to enable save/export."
+                                  : "Pick a source project to start editing and saving shorts."}
                               </div>
                             )}
                             <div className="pt-2 flex flex-wrap gap-2">
