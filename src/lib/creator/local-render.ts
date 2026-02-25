@@ -128,7 +128,8 @@ function getFfmpegFilter(
   sourceWidth: number,
   sourceHeight: number,
   editor: CreatorShortEditorState,
-  previewViewport: { width: number; height: number } | null
+  previewViewport: { width: number; height: number } | null,
+  previewVideoRect?: { width: number; height: number } | null
 ): {
   filter: string;
   cropX: number;
@@ -140,13 +141,15 @@ function getFfmpegFilter(
   padX: number;
   padY: number;
 } {
-  const baseScale = Math.max(OUTPUT_WIDTH / sourceWidth, OUTPUT_HEIGHT / sourceHeight);
+  const viewportWidth = Math.max(1, previewViewport?.width ?? 320);
+  const viewportHeight = Math.max(1, previewViewport?.height ?? (viewportWidth * 16) / 9);
+
+
+  const baseScale = Math.min(OUTPUT_WIDTH / sourceWidth, OUTPUT_HEIGHT / sourceHeight);
   const scaleFactor = baseScale * Math.max(0.2, editor.zoom || 1);
   const scaledWidth = Math.max(1, Math.round(sourceWidth * scaleFactor));
   const scaledHeight = Math.max(1, Math.round(sourceHeight * scaleFactor));
 
-  const viewportWidth = Math.max(1, previewViewport?.width ?? 320);
-  const viewportHeight = Math.max(1, previewViewport?.height ?? (viewportWidth * 16) / 9);
   const panXOut = (editor.panX / viewportWidth) * OUTPUT_WIDTH;
   const panYOut = (editor.panY / viewportHeight) * OUTPUT_HEIGHT;
 
@@ -214,6 +217,7 @@ export interface LocalShortExportInput {
   editor: CreatorShortEditorState;
   sourceVideoSize: { width: number; height: number };
   previewViewport?: { width: number; height: number } | null;
+  previewVideoRect?: { width: number; height: number } | null;
   onProgress?: (progressPct: number) => void;
 }
 
@@ -238,7 +242,8 @@ export async function exportShortVideoLocally(input: LocalShortExportInput): Pro
     input.sourceVideoSize.width,
     input.sourceVideoSize.height,
     input.editor,
-    input.previewViewport ?? null
+    input.previewViewport ?? null,
+    input.previewVideoRect ?? null
   );
 
   const subtitleAss = buildAssSubtitleScript(input.subtitleChunks ?? [], input.clip, input.plan, input.editor);
@@ -404,6 +409,11 @@ export async function exportShortVideoLocally(input: LocalShortExportInput): Pro
       preview.canvasWidth !== preview.scaledWidth || preview.canvasHeight !== preview.scaledHeight
         ? `Zoom-out/pad mode. Scaled frame ${preview.scaledWidth}x${preview.scaledHeight}, padded canvas ${preview.canvasWidth}x${preview.canvasHeight} @ (${preview.padX}, ${preview.padY}), crop @ (${preview.cropX}, ${preview.cropY}).`
         : `Crop based on zoom/pan. Scaled frame ${preview.scaledWidth}x${preview.scaledHeight}, crop @ (${preview.cropX}, ${preview.cropY}).`,
+      input.previewVideoRect
+        ? `Preview parity source: video rect ${Math.round(input.previewVideoRect.width)}x${Math.round(input.previewVideoRect.height)} inside viewport ${Math.round(
+            input.previewViewport?.width ?? 0
+          )}x${Math.round(input.previewViewport?.height ?? 0)}.`
+        : "Preview parity source: computed from source dimensions + editor zoom.",
       usedSubtitleBurnIn
         ? `Subtitles burned in at x=${input.editor.subtitleXPositionPct.toFixed(0)}%, y=${input.editor.subtitleYOffsetPct.toFixed(0)}%.`
         : "Rendered without burned subtitles (subtitle filter unavailable or no subtitle chunks).",

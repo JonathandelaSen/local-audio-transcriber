@@ -892,7 +892,9 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
 
       const sourceVideoSize = await readVideoDimensions(mediaFile, previewVideoRef.current);
       const frameRect = previewFrameRef.current?.getBoundingClientRect();
+      const videoRect = previewVideoRef.current?.getBoundingClientRect();
       const previewViewport = frameRect ? { width: frameRect.width, height: frameRect.height } : null;
+      const previewVideoRect = videoRect ? { width: videoRect.width, height: videoRect.height } : null;
 
       const localExport = await exportShortVideoLocally({
         sourceFile: mediaFile,
@@ -903,6 +905,7 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
         editor: currentEditorState,
         sourceVideoSize,
         previewViewport,
+        previewVideoRect,
         onProgress: setExportProgressPct,
       });
 
@@ -1979,13 +1982,12 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
                               onEnded={handleVideoEnded}
                               className="absolute"
                               style={{
-                                minWidth: "100%",
-                                minHeight: "100%",
-                                width: "auto",
-                                height: "auto",
+                                width: "100%",
+                                height: "100%",
+                                objectFit: "contain",
                                 left: "50%",
                                 top: "50%",
-                                transform: `translate(calc(-50% + ${panX}px), calc(-50% + ${panY}px)) scale(${zoom})`,
+                                transform: `translate(-50%, -50%) scale(${zoom}) translate(${panX}px, ${panY}px)`,
                                 transformOrigin: "center center",
                               }}
                             />
