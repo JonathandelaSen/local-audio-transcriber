@@ -281,6 +281,7 @@ function toggleBlock(list: CreatorVideoInfoBlock[], block: CreatorVideoInfoBlock
 }
 
 type CreatorToolMode = "video_info" | "clip_lab";
+type HubView = "start" | "ai_lab" | "editor";
 
 type CreatorHubProps = {
   initialTool?: CreatorToolMode;
@@ -298,6 +299,7 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
     setLastRender,
   } = useCreatorHub();
 
+  const [hubView, setHubView] = useState<HubView>("start");
   const [selectedProjectId, setSelectedProjectId] = useState<string>("");
   const [selectedTranscriptId, setSelectedTranscriptId] = useState<string>("");
   const [selectedSubtitleId, setSelectedSubtitleId] = useState<string>("");
@@ -1341,25 +1343,20 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
                   )}
 
                   <div className="flex flex-wrap items-center gap-3">
-                    <Button
-                      onClick={activeTool === "video_info" ? handleGenerateVideoInfo : handleGenerateClipLab}
-                      disabled={!canAnalyze || isAnalyzing || (activeTool === "video_info" && videoInfoBlocks.length === 0)}
-                      className={cn(
-                        "text-black font-semibold",
-                        activeTool === "video_info"
-                          ? "bg-gradient-to-r from-cyan-500 to-emerald-400 hover:from-cyan-400 hover:to-emerald-300"
-                          : "bg-gradient-to-r from-orange-500 to-fuchsia-400 hover:from-orange-400 hover:to-fuchsia-300"
-                      )}
-                    >
-                      {isAnalyzing ? (
-                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                      ) : activeTool === "video_info" ? (
-                        <WandSparkles className="w-4 h-4 mr-2" />
-                      ) : (
-                        <Flame className="w-4 h-4 mr-2" />
-                      )}
-                      {activeTool === "video_info" ? "Generate Video Info" : "Generate Clip Lab"}
-                    </Button>
+                    {activeTool === "video_info" && (
+                      <Button
+                        onClick={handleGenerateVideoInfo}
+                        disabled={!canAnalyze || isAnalyzing || videoInfoBlocks.length === 0}
+                        className="text-black font-semibold bg-gradient-to-r from-cyan-500 to-emerald-400 hover:from-cyan-400 hover:to-emerald-300"
+                      >
+                        {isAnalyzing ? (
+                          <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                        ) : (
+                          <WandSparkles className="w-4 h-4 mr-2" />
+                        )}
+                        Generate Video Info
+                      </Button>
+                    )}
                     <Button variant="ghost" onClick={() => void refresh()} className="bg-white/5 hover:bg-white/10 text-white/80">
                       Refresh Media Library
                     </Button>
@@ -1382,7 +1379,7 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
             </CardContent>
           </Card>
 
-          {isToolLocked ? (
+          {activeTool !== "clip_lab" && (isToolLocked ? (
             <Card
               className={cn(
                 "border-white/10 text-white shadow-2xl backdrop-blur-xl overflow-hidden",
@@ -1498,9 +1495,7 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
                     onClick={() => setActiveTool("clip_lab")}
                     className={cn(
                       "rounded-2xl border p-4 text-left transition-colors",
-                      activeTool === "clip_lab"
-                        ? "border-orange-300/35 bg-orange-400/8 shadow-[0_0_25px_rgba(251,146,60,0.12)]"
-                        : "border-white/10 bg-black/20 hover:bg-black/25"
+                      "border-white/10 bg-black/20 hover:bg-black/25"
                     )}
                   >
                     <div className="font-semibold text-white mb-1 flex items-center gap-2">
@@ -1516,7 +1511,7 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
                 </div>
               </CardContent>
             </Card>
-          )}
+          ))}
         </div>
 
         {(analysis || activeTool === "clip_lab") && (
@@ -1743,18 +1738,126 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
             </div>
             )}
 
-            {activeTool === "clip_lab" && (
-              <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 items-start">
+            {activeTool === "clip_lab" && hubView === "start" && (
+              <div className="space-y-8">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-stretch">
+                  <Card 
+                    className="bg-white/[0.03] border-white/10 text-white shadow-xl backdrop-blur-xl cursor-pointer hover:bg-white/5 transition-colors group relative overflow-hidden"
+                    onClick={() => {
+                      if (!manualFallbackClip || !manualFallbackPlan) return;
+                      setActiveSavedShortProjectId("");
+                      setSelectedClipId(manualFallbackClip.id);
+                      setSelectedPlanId(manualFallbackPlan.id);
+                      setShortProjectNameDraft("");
+                      setTrimStartNudge(0);
+                      setTrimEndNudge(0);
+                      setHubView("editor");
+                    }}
+                  >
+                    <div className="absolute inset-0 bg-gradient-to-br from-cyan-500/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
+                    <CardHeader>
+                      <CardTitle className="text-2xl font-bold flex items-center gap-2">
+                        ✂️ Manual Edit
+                      </CardTitle>
+                      <CardDescription className="text-white/60 text-base mt-2 leading-relaxed">
+                        Jump straight into the editor with your full video. Perfect for when you already know what you want to cut.
+                      </CardDescription>
+                    </CardHeader>
+                  </Card>
+
+                  <Card 
+                    className="bg-white/[0.03] border-white/10 text-white shadow-xl backdrop-blur-xl cursor-pointer hover:bg-white/5 transition-colors group relative overflow-hidden"
+                    onClick={() => setHubView("ai_lab")}
+                  >
+                    <div className="absolute inset-0 bg-gradient-to-br from-fuchsia-500/10 to-orange-500/10 opacity-0 group-hover:opacity-100 transition-opacity" />
+                    <CardHeader>
+                      <CardTitle className="text-2xl font-bold flex items-center gap-2">
+                        ✨ AI Magic Clips
+                      </CardTitle>
+                      <CardDescription className="text-white/60 text-base mt-2 leading-relaxed">
+                        Let AI analyze your transcript and suggest the most viral, engaging moments based on your defined niche and tone.
+                      </CardDescription>
+                    </CardHeader>
+                  </Card>
+                </div>
+                
+                {/* Saved Shorts Gallery */}
+                {!isLoadingShortsLibrary && savedShortProjects.length > 0 && (
+                  <div className="space-y-4 mt-8">
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-xl font-bold text-white/90">Your Saved Shorts</h3>
+                      <span className="text-xs text-white/50">{savedShortProjects.length} preset{savedShortProjects.length === 1 ? '' : 's'}</span>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                      {savedShortProjects.map((project) => {
+                        const exportCount = (exportsByProjectId.get(project.id) ?? []).length;
+                        return (
+                          <div
+                            key={project.id}
+                            onClick={() => {
+                              applySavedShortProject(project);
+                              setHubView("editor");
+                            }}
+                            className="rounded-xl border border-white/10 bg-black/20 hover:bg-white/5 cursor-pointer transition-colors p-5 group relative overflow-hidden"
+                          >
+                            <div className="absolute inset-0 bg-gradient-to-br from-emerald-500/5 to-cyan-500/5 opacity-0 group-hover:opacity-100 transition-opacity" />
+                            <div className="relative">
+                              <div className="flex items-start justify-between gap-3 mb-2">
+                                <div className="text-base font-semibold text-white/90 line-clamp-2 leading-snug">{project.name}</div>
+                                <div className="text-10px uppercase tracking-wider bg-emerald-500/10 text-emerald-300 px-2.5 py-1 rounded-full border border-emerald-500/20 whitespace-nowrap">{platformLabel(project.platform)}</div>
+                              </div>
+                              <div className="text-xs text-white/50 font-medium mb-4">
+                                {secondsToClock(project.clip.startSeconds)} → {secondsToClock(project.clip.endSeconds)}
+                              </div>
+                              <div className="flex items-center justify-between pt-3 border-t border-white/5">
+                                <div className="text-[11px] text-white/40">{new Date(project.updatedAt).toLocaleDateString()}</div>
+                                {exportCount > 0 ? (
+                                  <div className="flex items-center gap-1.5 text-[11px] text-white/60 bg-white/5 px-2 py-0.5 rounded-full border border-white/5">
+                                    <Download className="w-3 h-3" />
+                                    <span>{exportCount} file{exportCount === 1 ? '' : 's'}</span>
+                                  </div>
+                                ) : (
+                                  <div className="text-[11px] text-white/30 italic">Not exported yet</div>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {activeTool === "clip_lab" && hubView === "ai_lab" && (
+              <div className="space-y-6">
+                <div className="flex items-center justify-between">
+                  <Button variant="ghost" className="text-white/70 hover:text-white hover:bg-white/10 -ml-3" onClick={() => setHubView("start")}>
+                    <ArrowLeft className="w-4 h-4 mr-2" /> Back
+                  </Button>
+                  <Button
+                    onClick={handleGenerateClipLab}
+                    disabled={!canAnalyze || isAnalyzing}
+                    className="text-black font-semibold bg-gradient-to-r from-orange-500 to-fuchsia-400 hover:from-orange-400 hover:to-fuchsia-300 shadow-lg"
+                  >
+                    {isAnalyzing ? (
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    ) : (
+                      <Flame className="w-4 h-4 mr-2" />
+                    )}
+                    {analysis?.viralClips?.length ? "Regenerate Clips" : "Generate Clips"}
+                  </Button>
+                </div>
                 <Card className="bg-white/[0.03] border-white/10 text-white shadow-xl backdrop-blur-xl">
                   <CardHeader>
-                    <CardTitle className="flex items-center gap-2"><Flame className="w-5 h-5 text-orange-300" /> Viral Clip Finder</CardTitle>
-                    <CardDescription className="text-white/50">Pick strong short-form moments to cut and package, or skip this and edit manually below.</CardDescription>
+                    <CardTitle className="flex items-center gap-2 text-2xl"><Flame className="w-6 h-6 text-orange-300" /> AI Magic Clips</CardTitle>
+                    <CardDescription className="text-white/50 text-base">Review AI-suggested viral moments. Click any clip to start editing.</CardDescription>
                   </CardHeader>
-                  <CardContent className="space-y-3 max-h-[42rem] overflow-auto pr-1">
+                  <CardContent className="space-y-4 max-h-[42rem] overflow-auto pr-1">
                     {analysis?.viralClips?.length ? (
                       analysis.viralClips.map((clip) => {
-                        const isActive = selectedClip?.id === clip.id;
-                        const textPreview = selectedSubtitle ? summarizeClipText(clip, selectedSubtitle.chunks, 170) : clip.hook;
+                        const textPreview = selectedSubtitle ? summarizeClipText(clip, selectedSubtitle.chunks, 200) : clip.hook;
                         return (
                           <button
                             key={clip.id}
@@ -1764,123 +1867,51 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
                               setShortProjectNameDraft("");
                               setTrimStartNudge(0);
                               setTrimEndNudge(0);
+                              setHubView("editor");
                             }}
-                            className={`w-full text-left rounded-2xl border p-4 transition-colors ${
-                              isActive
-                                ? "border-orange-300/40 bg-orange-400/10"
-                                : "border-white/10 bg-black/20 hover:bg-black/30"
-                            }`}
+                            className="w-full text-left rounded-2xl border border-white/10 bg-black/20 hover:bg-black/40 hover:border-orange-300/30 transition-all p-5 group"
                           >
-                            <div className="flex items-center justify-between gap-3 mb-2">
-                              <div className="text-sm font-semibold text-white/90">{clip.title}</div>
-                              <div className="text-xs px-2 py-1 rounded-full bg-white/5 border border-white/10 text-orange-100">Score {clip.score}</div>
+                            <div className="flex items-center justify-between gap-3 mb-3">
+                              <div className="text-base font-semibold text-white/90 group-hover:text-orange-200 transition-colors">{clip.title}</div>
+                              <div className="text-xs px-2.5 py-1 rounded-full bg-orange-400/10 border border-orange-400/20 text-orange-100/90 font-medium tracking-wide">Score {clip.score}</div>
                             </div>
-                            <div className="text-xs text-white/50 mb-2">
+                            <div className="text-xs text-white/50 mb-3 font-medium">
                               {secondsToClock(clip.startSeconds)} → {secondsToClock(clip.endSeconds)} ({Math.round(clip.durationSeconds)}s)
                             </div>
-                            <div className="text-sm text-white/80 leading-relaxed">{textPreview}</div>
-                            <div className="mt-2 text-xs text-white/55">{clip.reason}</div>
+                            <div className="text-sm text-white/80 leading-relaxed italic border-l-2 border-white/10 pl-3 py-1 mb-3">{textPreview}</div>
+                            <div className="text-xs text-white/55 bg-white/5 rounded-lg p-3 leading-relaxed">{clip.reason}</div>
                           </button>
                         );
                       })
                     ) : (
-                      <div className="rounded-xl border border-dashed border-white/15 bg-black/20 p-5 text-sm text-white/60">
-                        Run <span className="text-white">Generate Clip Lab</span> to populate viral clip candidates, or use the manual editor preset below without generating clips.
+                      <div className="rounded-xl border border-dashed border-white/15 bg-black/20 p-8 text-center text-sm text-white/60">
+                        <Flame className="w-8 h-8 mx-auto text-white/20 mb-3" />
+                        Run <span className="text-white font-semibold">Generate Clip Lab</span> up top to populate viral clip candidates!
                       </div>
                     )}
                   </CardContent>
                 </Card>
+              </div>
+            )}
+
+            {activeTool === "clip_lab" && hubView === "editor" && (
+              <div className="space-y-6">
+                <div>
+                  <Button variant="ghost" className="text-white/70 hover:text-white hover:bg-white/10 -ml-3" onClick={() => setHubView("start")}>
+                    <ArrowLeft className="w-4 h-4 mr-2" /> Back
+                  </Button>
+                </div>
+                <div className="grid grid-cols-1 xl:grid-cols-[280px_1fr] 2xl:grid-cols-[320px_1fr] gap-6 items-start">
 
                 <div className="space-y-6">
                   <Card className="bg-white/[0.03] border-white/10 text-white shadow-xl backdrop-blur-xl">
-                  <CardHeader>
-                      <CardTitle className="flex items-center gap-2"><Scissors className="w-5 h-5 text-cyan-300" /> Shorts Planner</CardTitle>
-                      <CardDescription className="text-white/50">Platform-specific packaging from a selected viral clip, a restored saved short, or the manual fallback preset.</CardDescription>
-                    </CardHeader>
-                    <CardContent className="space-y-4">
-                      {!selectedClip ? (
-                        <div className="text-sm text-white/60">Select a source project/transcript/subtitles to unlock manual editing, or open a saved short.</div>
-                      ) : (
-                        <>
-                          <div className="rounded-xl border border-white/10 bg-black/20 p-4">
-                            <div className="flex items-center justify-between gap-2 mb-2">
-                              <div className="text-xs uppercase tracking-wider text-white/50">Selected Clip</div>
-                              {manualFallbackClip && selectedClip.id === manualFallbackClip.id && (
-                                <div className="text-[11px] px-2 py-1 rounded-full border border-cyan-300/20 bg-cyan-400/5 text-cyan-100">
-                                  Manual mode
-                                </div>
-                              )}
-                            </div>
-                            <div className="text-sm text-white/90 font-semibold">
-                              {secondsToClock(selectedClip.startSeconds)} → {secondsToClock(selectedClip.endSeconds)} · {Math.round(selectedClip.durationSeconds)}s
-                            </div>
-                            <div className="text-sm text-white/75 mt-2 leading-relaxed">{clipTextPreview || selectedClip.hook}</div>
-                          </div>
-
-                          {plansForSelectedClip.length > 0 ? (
-                            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                              {plansForSelectedClip.map((plan) => {
-                                const active = selectedPlan?.id === plan.id;
-                                return (
-                                  <button
-                                    key={plan.id}
-                                    onClick={() => {
-                                      setActiveSavedShortProjectId("");
-                                      setSelectedPlanId(plan.id);
-                                      setShortProjectNameDraft("");
-                                    }}
-                                    className={`text-left rounded-xl border p-3 transition-colors ${
-                                      active ? "border-cyan-300/40 bg-cyan-400/10" : "border-white/10 bg-black/20 hover:bg-black/30"
-                                    }`}
-                                  >
-                                    <div className="text-sm font-semibold text-white/90">{platformLabel(plan.platform)}</div>
-                                    <div className="text-xs text-white/60 mt-1">Style: {plan.subtitleStyle}</div>
-                                    <div className="text-xs text-white/60">Hook: {plan.openingText.slice(0, 48)}</div>
-                                  </button>
-                                );
-                              })}
-                            </div>
-                          ) : (
-                            <div className="text-sm text-white/55 rounded-xl border border-white/10 bg-black/20 p-4">
-                              No planner presets available for this clip in the current analysis. A restored saved short can still be exported.
-                            </div>
-                          )}
-
-                          {selectedPlan && (
-                            <div className="rounded-xl border border-white/10 bg-black/20 p-4 space-y-3">
-                              <div className="flex items-start justify-between gap-3">
-                                <div>
-                                  <div className="text-sm font-semibold text-white/90">{selectedPlan.title}</div>
-                                  <div className="text-xs text-white/50 mt-1">
-                                    {platformLabel(selectedPlan.platform)} • {selectedPlan.editorPreset.resolution} • {selectedPlan.editorPreset.aspectRatio}
-                                  </div>
-                                </div>
-                                <Button
-                                  size="sm"
-                                  variant="ghost"
-                                  className="text-white/70 hover:bg-white/10"
-                                  onClick={() => copyText(selectedPlan.caption, "Short caption")}
-                                >
-                                  <Copy className="w-4 h-4 mr-2" /> Caption
-                                </Button>
-                              </div>
-                              <div className="text-xs uppercase tracking-wider text-white/50">Caption</div>
-                              <textarea readOnly value={selectedPlan.caption} className="w-full h-24 rounded-lg border border-white/10 bg-white/5 p-2 text-xs text-white/80" />
-                            </div>
-                          )}
-                        </>
-                      )}
-                    </CardContent>
-                  </Card>
-
-                  <Card className="bg-white/[0.03] border-white/10 text-white shadow-xl backdrop-blur-xl">
-                    <CardHeader>
-                      <CardTitle className="flex items-center gap-2"><FolderOpen className="w-5 h-5 text-emerald-300" /> Saved Shorts Lifecycle</CardTitle>
-                      <CardDescription className="text-white/50">
-                        Saved editor configurations and exported MP4 files for this source project.
+                    <CardHeader className="pb-4">
+                      <CardTitle className="flex items-center gap-2 text-lg"><FolderOpen className="w-5 h-5 text-emerald-300" /> Saved Shorts</CardTitle>
+                      <CardDescription className="text-white/50 text-xs">
+                        Jump between presets quickly.
                       </CardDescription>
                     </CardHeader>
-                    <CardContent className="space-y-4">
+                    <CardContent className="space-y-3">
                       {shortsLibraryError && (
                         <div className="text-xs text-red-300 bg-red-500/10 border border-red-500/20 rounded-lg p-2">{shortsLibraryError}</div>
                       )}
@@ -1888,74 +1919,39 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
                         <div className="text-sm text-white/50">Loading saved shorts…</div>
                       )}
                       {!isLoadingShortsLibrary && savedShortProjects.length === 0 && (
-                        <div className="rounded-xl border border-dashed border-white/15 bg-black/20 p-4 text-sm text-white/60">
-                          No saved shorts yet. Save the current editor configuration or export a short to start the lifecycle.
+                        <div className="rounded-xl border border-dashed border-white/15 bg-black/20 p-4 text-xs text-white/60 text-center">
+                          No saved shorts yet.
                         </div>
                       )}
 
-                      {savedShortProjects.map((project) => {
-                        const isActive = activeSavedShortProjectId === project.id;
-                        const exportCount = (exportsByProjectId.get(project.id) ?? []).length;
-                        return (
-                          <div
-                            key={project.id}
-                            className={cn(
-                              "rounded-xl border p-3",
-                              isActive ? "border-emerald-300/40 bg-emerald-400/10" : "border-white/10 bg-black/20"
-                            )}
-                          >
-                            <div className="flex items-start justify-between gap-3">
-                              <div className="min-w-0">
-                                <div className="text-sm font-semibold text-white/90 truncate">{project.name}</div>
-                                <div className="text-xs text-white/55 mt-1">
+                      <div className="space-y-2 max-h-[60vh] overflow-y-auto pr-1">
+                        {savedShortProjects.map((project) => {
+                          const isActive = activeSavedShortProjectId === project.id;
+                          return (
+                            <div
+                              key={project.id}
+                              onClick={() => applySavedShortProject(project)}
+                              className={cn(
+                                "rounded-xl border p-3 cursor-pointer transition-colors hover:bg-white/10",
+                                isActive ? "border-emerald-300/40 bg-emerald-400/10 pointer-events-none" : "border-white/10 bg-black/20"
+                              )}
+                            >
+                              <div className="text-sm font-semibold text-white/90 truncate mb-1">{project.name}</div>
+                              <div className="flex items-center justify-between">
+                                <div className="text-[11px] text-white/55">
                                   {platformLabel(project.platform)} · {secondsToClock(project.clip.startSeconds)} → {secondsToClock(project.clip.endSeconds)}
                                 </div>
-                                <div className="text-xs text-white/45 mt-1">
-                                  {new Date(project.updatedAt).toLocaleString()} · {project.status} · {exportCount} export{exportCount === 1 ? "" : "s"}
-                                </div>
-                                {project.lastError && (
-                                  <div className="text-xs text-red-300/90 mt-2">{project.lastError}</div>
-                                )}
+                                {isActive && <div className="w-2 h-2 rounded-full bg-emerald-400" />}
                               </div>
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                className="text-white/80 hover:bg-white/10"
-                                title="Load saved short into editor"
-                                onClick={() => applySavedShortProject(project)}
-                              >
-                                <FolderOpen className="w-4 h-4 mr-2" /> Load
-                              </Button>
                             </div>
-
-                            {isActive && (exportsByProjectId.get(project.id)?.length ?? 0) > 0 && (
-                              <div className="mt-3 space-y-2">
-                                {(exportsByProjectId.get(project.id) ?? []).slice(0, 3).map((exp) => (
-                                  <div key={exp.id} className="rounded-lg border border-white/10 bg-white/5 p-2 flex items-center justify-between gap-3">
-                                    <div className="min-w-0">
-                                      <div className="text-xs text-white/85 truncate">{exp.filename}</div>
-                                      <div className="text-[11px] text-white/50">{new Date(exp.createdAt).toLocaleString()} · {formatBytes(exp.sizeBytes)}</div>
-                                    </div>
-                                    <Button
-                                      size="sm"
-                                      variant="ghost"
-                                      className="text-white/75 hover:bg-white/10"
-                                      onClick={() => handleDownloadSavedExport(exp)}
-                                    >
-                                      <Download className="w-3.5 h-3.5 mr-1.5" /> Download
-                                    </Button>
-                                  </div>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
+                          );
+                        })}
+                      </div>
                     </CardContent>
                   </Card>
                 </div>
 
-                <Card className="bg-white/[0.03] border-white/10 text-white shadow-xl backdrop-blur-xl xl:col-span-2">
+                <Card className="bg-white/[0.03] border-white/10 text-white shadow-xl backdrop-blur-xl">
                   <CardHeader>
                     <CardTitle className="flex items-center gap-2"><Clapperboard className="w-5 h-5 text-fuchsia-300" /> Vertical Editor + Export</CardTitle>
                     <CardDescription className="text-white/50">
@@ -2322,47 +2318,6 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
                           </div>
                         </div>
 
-                        {lastRender && (
-                          <div className="rounded-xl border border-white/10 bg-black/20 p-4 space-y-3">
-                            <div className="flex flex-wrap items-center justify-between gap-2">
-                              <div>
-                                <div className="text-sm font-semibold text-white/90 flex items-center gap-2">
-                                  <CheckCircle2 className="w-4 h-4 text-emerald-300" />
-                                  Last Export Package
-                                </div>
-                                <div className="text-xs text-white/50">
-                                  Job {lastRender.jobId} · {lastRender.status} · {lastRender.providerMode}
-                                </div>
-                              </div>
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                className="text-white/70 hover:bg-white/10"
-                                onClick={() => copyText(lastRender.debugPreview.ffmpegCommandPreview.join(" "), "FFmpeg command preview")}
-                              >
-                                <Copy className="w-4 h-4 mr-2" /> FFmpeg cmd
-                              </Button>
-                            </div>
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
-                              <div className="rounded-lg border border-white/10 bg-white/5 p-3">
-                                <div className="text-white/50 mb-1">Output</div>
-                                <div className="text-white/90">{lastRender.output.filename}</div>
-                                <div className="text-white/60 mt-1">{platformLabel(lastRender.output.platform)} · {lastRender.output.resolution}</div>
-                              </div>
-                              <div className="rounded-lg border border-white/10 bg-white/5 p-3">
-                                <div className="text-white/50 mb-1">Notes</div>
-                                <ul className="space-y-1 text-white/80">
-                                  {lastRender.debugPreview.notes.map((note) => (
-                                    <li key={note}>• {note}</li>
-                                  ))}
-                                </ul>
-                              </div>
-                            </div>
-                            <pre className="text-[11px] text-cyan-100/80 bg-black/35 border border-white/10 rounded-lg p-3 overflow-x-auto">
-                              {lastRender.debugPreview.ffmpegCommandPreview.join(" ")}
-                            </pre>
-                          </div>
-                        )}
 
                         {activeSavedShortProject && savedExportsForActiveShort.length > 0 && (
                           <div className="rounded-xl border border-white/10 bg-black/20 p-4 space-y-3">
@@ -2403,6 +2358,7 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
                     </div>
                   </CardContent>
                 </Card>
+                </div>
               </div>
             )}
           </>
