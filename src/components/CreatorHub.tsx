@@ -2017,14 +2017,24 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
 
                           {previewSubtitleLine && (
                             <div
-                              className="absolute w-[88%] px-3 py-2 rounded-xl bg-black/55 border border-white/10 text-center transition-opacity duration-150"
+                              className="absolute px-2 py-1.5 text-center transition-opacity duration-150"
                               style={{
                                 left: `${subtitleXPositionPct}%`,
                                 top: `${subtitleYOffsetPct}%`,
                                 transform: `translate(-50%, -50%) scale(${subtitleScale})`,
+                                maxWidth: "80%",
+                                backgroundColor: "rgba(0,0,0,0.43)",
+                                fontFamily: "var(--font-inter), 'Inter', sans-serif",
                               }}
                             >
-                              <div className={`text-sm leading-tight ${selectedPlan ? subtitleStyleClass(selectedPlan.subtitleStyle) : "text-white font-semibold"}`}>
+                              <div
+                                className="text-sm leading-tight font-semibold"
+                                style={{
+                                  color: "#FFFFFF",
+                                  WebkitTextStroke: "0.5px rgba(10,10,10,0.8)",
+                                  paintOrder: "stroke fill",
+                                }}
+                              >
                                 {previewSubtitleLine}
                               </div>
                             </div>
