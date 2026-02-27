@@ -4,6 +4,7 @@ import {
   ffmpegColorWithAlpha,
   ffmpegHexColorFromCss,
   resolveCreatorSubtitleStyle,
+  wrapSubtitleLines,
 } from "@/lib/creator/subtitle-style";
 import type {
   CreatorShortEditorState,
@@ -75,22 +76,6 @@ async function ensureFontLoaded(ff: Awaited<ReturnType<typeof getFFmpeg>>): Prom
   }
 }
 
-function wrapSubtitleText(text: string, maxCharsPerLine: number): string {
-  const words = text.split(/\s+/);
-  const lines: string[] = [];
-  let currentLine = "";
-  for (const word of words) {
-    if (currentLine && (currentLine.length + 1 + word.length) > maxCharsPerLine) {
-      lines.push(currentLine);
-      currentLine = word;
-    } else {
-      currentLine = currentLine ? `${currentLine} ${word}` : word;
-    }
-  }
-  if (currentLine) lines.push(currentLine);
-  return lines.join("\n");
-}
-
 function buildDrawtextSubtitleFilters(
   subtitleChunks: SubtitleChunk[],
   clip: CreatorViralClip,
@@ -124,24 +109,32 @@ function buildDrawtextSubtitleFilters(
   const x = `(w*${(editor.subtitleXPositionPct / 100).toFixed(4)}-tw/2)`;
   const y = `(h*${(editor.subtitleYOffsetPct / 100).toFixed(4)}-th/2)`;
 
-  return chunks.map((chunk) => {
-    const wrapped = wrapSubtitleText(chunk.text, maxCharsPerLine);
-    const transformed = style.textCase === "uppercase" ? wrapped.toUpperCase() : wrapped;
-    const escaped = drawtextEscape(transformed);
-    return (
-      `drawtext=fontfile=${FONT_PATH}` +
-      `:text='${escaped}'` +
-      `:fontsize=${fontSize}` +
-      `:fontcolor=${ffmpegHexColorFromCss(style.textColor)}` +
-      `:borderw=${style.outlineWidth.toFixed(2)}` +
-      `:bordercolor=${ffmpegHexColorFromCss(style.outlineColor)}` +
-      `:box=1` +
-      `:boxcolor=${ffmpegColorWithAlpha(style.backgroundColor, style.backgroundOpacity)}` +
-      `:boxborderw=${style.backgroundPadding.toFixed(2)}` +
-      `:x=${x}` +
-      `:y=${y}` +
-      `:enable='between(t,${(chunk.start + timeOffsetSeconds).toFixed(3)},${(chunk.end + timeOffsetSeconds).toFixed(3)})'`
-    );
+  return chunks.flatMap((chunk) => {
+    const transformed = style.textCase === "uppercase" ? chunk.text.toUpperCase() : chunk.text;
+    const lines = wrapSubtitleLines(transformed, maxCharsPerLine);
+    const lineStep = Math.round(fontSize * 1.18);
+    const centerIndex = (lines.length - 1) / 2;
+
+    return lines.map((line, lineIndex) => {
+      const escaped = drawtextEscape(line);
+      const offsetPx = (lineIndex - centerIndex) * lineStep;
+      const yWithOffset = offsetPx === 0 ? y : `(${y}${offsetPx >= 0 ? "+" : ""}${offsetPx.toFixed(2)})`;
+
+      return (
+        `drawtext=fontfile=${FONT_PATH}` +
+        `:text='${escaped}'` +
+        `:fontsize=${fontSize}` +
+        `:fontcolor=${ffmpegHexColorFromCss(style.textColor)}` +
+        `:borderw=${style.outlineWidth.toFixed(2)}` +
+        `:bordercolor=${ffmpegHexColorFromCss(style.outlineColor)}` +
+        `:box=1` +
+        `:boxcolor=${ffmpegColorWithAlpha(style.backgroundColor, style.backgroundOpacity)}` +
+        `:boxborderw=${style.backgroundPadding.toFixed(2)}` +
+        `:x=${x}` +
+        `:y=${yWithOffset}` +
+        `:enable='between(t,${(chunk.start + timeOffsetSeconds).toFixed(3)},${(chunk.end + timeOffsetSeconds).toFixed(3)})'`
+      );
+    });
   });
 }
 
@@ -254,33 +247,53 @@ export async function exportShortVideoLocally(input: LocalShortExportInput): Pro
   // Build the video filter chain: scale/pad/crop + optional drawtext subtitle filters
   const baseFilter = preview.filter;
 
-  const ffmpegBaseArgs = [
-    "-ss",
-    String(inputSeekSeconds),
-    "-i",
-    `${mountDir}/${input.sourceFile.name}`,
-    "-ss",
-    String(exactTrimAfterSeekSeconds),
-    "-t",
-    String(clipDuration),
-    "-vf",
-    baseFilter,
-    "-c:v",
-    "libx264",
-    "-preset",
-    "veryfast",
-    "-crf",
-    "22",
-    "-c:a",
-    "aac",
-    "-b:a",
-    "128k",
-    "-movflags",
-    "+faststart",
-    outputPath,
-  ];
+  const buildFfmpegArgs = (filter: string, seekMode: "hybrid" | "exact"): string[] => {
+    const preInputSeek = seekMode === "hybrid" ? ["-ss", String(inputSeekSeconds)] : [];
+    const postInputSeekSeconds = seekMode === "hybrid" ? exactTrimAfterSeekSeconds : input.clip.startSeconds;
+    return [
+      ...preInputSeek,
+      "-i",
+      `${mountDir}/${input.sourceFile.name}`,
+      "-ss",
+      String(postInputSeekSeconds),
+      "-t",
+      String(clipDuration),
+      "-vf",
+      filter,
+      "-c:v",
+      "libx264",
+      "-preset",
+      "veryfast",
+      "-crf",
+      "22",
+      "-c:a",
+      "aac",
+      "-b:a",
+      "128k",
+      "-movflags",
+      "+faststart",
+      outputPath,
+    ];
+  };
+
+  const renderWithSeekFallback = async (filter: string): Promise<"hybrid" | "exact"> => {
+    try {
+      emitProgress(8);
+      await runFfmpegExecWithFallbackProgress(buildFfmpegArgs(filter, "hybrid"));
+      return "hybrid";
+    } catch (hybridError) {
+      console.warn("Hybrid-seek render failed, retrying with exact-seek mode:", hybridError);
+      try {
+        await ff.deleteFile(outputPath);
+      } catch {}
+      emitProgress(8);
+      await runFfmpegExecWithFallbackProgress(buildFfmpegArgs(filter, "exact"));
+      return "exact";
+    }
+  };
 
   let usedSubtitleBurnIn = false;
+  let usedSeekMode: "hybrid" | "exact" = "hybrid";
 
   try {
     emitProgress(1);
@@ -294,29 +307,20 @@ export async function exportShortVideoLocally(input: LocalShortExportInput): Pro
       if (hasFontLoaded) {
         emitProgress(6);
         const fullFilter = [baseFilter, ...subtitleDrawtextFilters].join(",");
-        const subtitleArgs = [...ffmpegBaseArgs];
-        const vfIndex = subtitleArgs.indexOf("-vf");
-        if (vfIndex !== -1) {
-          subtitleArgs[vfIndex + 1] = fullFilter;
-        }
         try {
-          emitProgress(8);
-          await runFfmpegExecWithFallbackProgress(subtitleArgs);
+          usedSeekMode = await renderWithSeekFallback(fullFilter);
           usedSubtitleBurnIn = true;
         } catch (err) {
           console.warn("Drawtext subtitle burn-in failed, retrying export without subtitles:", err);
           try { await ff.deleteFile(outputPath); } catch {}
-          emitProgress(8);
-          await runFfmpegExecWithFallbackProgress(ffmpegBaseArgs);
+          usedSeekMode = await renderWithSeekFallback(baseFilter);
         }
       } else {
         console.warn("Font not available, exporting without subtitles");
-        emitProgress(8);
-        await runFfmpegExecWithFallbackProgress(ffmpegBaseArgs);
+        usedSeekMode = await renderWithSeekFallback(baseFilter);
       }
     } else {
-      emitProgress(8);
-      await runFfmpegExecWithFallbackProgress(ffmpegBaseArgs);
+      usedSeekMode = await renderWithSeekFallback(baseFilter);
     }
 
     emitProgress(98);
@@ -325,40 +329,71 @@ export async function exportShortVideoLocally(input: LocalShortExportInput): Pro
       throw new Error("FFmpeg returned text output instead of binary video data");
     }
     const data = output instanceof Uint8Array ? new Uint8Array(output) : new Uint8Array(output as Uint8Array);
+    if (data.byteLength < 1024) {
+      throw new Error("Rendered output is empty. Clip timing may be outside the source video range.");
+    }
     const arrayBuffer = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
     const file = new File([arrayBuffer], outputFilename, { type: "video/mp4" });
     emitProgress(100);
 
-    const ffmpegCommandPreview = [
-      "ffmpeg",
-      "-ss",
-      String(inputSeekSeconds),
-      "-i",
-      input.sourceFilename,
-      "-ss",
-      String(exactTrimAfterSeekSeconds),
-      "-t",
-      String(clipDuration),
-      "-vf",
-      usedSubtitleBurnIn ? `${baseFilter},...drawtext` : baseFilter,
-      "-c:v",
-      "libx264",
-      "-preset",
-      "veryfast",
-      "-crf",
-      "22",
-      "-c:a",
-      "aac",
-      "-b:a",
-      "128k",
-      outputFilename,
-    ];
+    const ffmpegCommandPreview =
+      usedSeekMode === "hybrid"
+        ? [
+            "ffmpeg",
+            "-ss",
+            String(inputSeekSeconds),
+            "-i",
+            input.sourceFilename,
+            "-ss",
+            String(exactTrimAfterSeekSeconds),
+            "-t",
+            String(clipDuration),
+            "-vf",
+            usedSubtitleBurnIn ? `${baseFilter},...drawtext` : baseFilter,
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "22",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "128k",
+            outputFilename,
+          ]
+        : [
+            "ffmpeg",
+            "-i",
+            input.sourceFilename,
+            "-ss",
+            String(input.clip.startSeconds),
+            "-t",
+            String(clipDuration),
+            "-vf",
+            usedSubtitleBurnIn ? `${baseFilter},...drawtext` : baseFilter,
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "22",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "128k",
+            outputFilename,
+          ];
+
+    const effectiveSubtitleStyle = resolveCreatorSubtitleStyle(input.plan.subtitleStyle, input.editor.subtitleStyle);
 
     const notes = [
       `Local browser render via ffmpeg.wasm (${input.plan.platform})`,
-      inputSeekSeconds > 0
-        ? `Hybrid trim seek enabled: fast pre-seek ${inputSeekSeconds.toFixed(2)}s, exact post-seek ${exactTrimAfterSeekSeconds.toFixed(2)}s.`
-        : `Exact trim seek from start: ${exactTrimAfterSeekSeconds.toFixed(2)}s.`,
+      usedSeekMode === "hybrid"
+        ? inputSeekSeconds > 0
+          ? `Hybrid trim seek enabled: fast pre-seek ${inputSeekSeconds.toFixed(2)}s, exact post-seek ${exactTrimAfterSeekSeconds.toFixed(2)}s.`
+          : `Exact trim seek from start: ${exactTrimAfterSeekSeconds.toFixed(2)}s.`
+        : `Fallback exact-seek mode used from ${input.clip.startSeconds.toFixed(2)}s for container compatibility.`,
       preview.canvasWidth !== preview.scaledWidth || preview.canvasHeight !== preview.scaledHeight
         ? `Zoom-out/pad mode. Scaled frame ${preview.scaledWidth}x${preview.scaledHeight}, padded canvas ${preview.canvasWidth}x${preview.canvasHeight} @ (${preview.padX}, ${preview.padY}), crop @ (${preview.cropX}, ${preview.cropY}).`
         : `Crop based on zoom/pan. Scaled frame ${preview.scaledWidth}x${preview.scaledHeight}, crop @ (${preview.cropX}, ${preview.cropY}).`,
@@ -368,8 +403,11 @@ export async function exportShortVideoLocally(input: LocalShortExportInput): Pro
           )}x${Math.round(input.previewViewport?.height ?? 0)}.`
         : "Preview parity source: computed from source dimensions + editor zoom.",
       usedSubtitleBurnIn
-        ? `Subtitles burned in at x=${input.editor.subtitleXPositionPct.toFixed(0)}%, y=${input.editor.subtitleYOffsetPct.toFixed(0)}% using ${resolveCreatorSubtitleStyle(input.plan.subtitleStyle, input.editor.subtitleStyle).preset}.`
+        ? `Subtitles burned in at x=${input.editor.subtitleXPositionPct.toFixed(0)}%, y=${input.editor.subtitleYOffsetPct.toFixed(0)}% using ${effectiveSubtitleStyle.preset}.`
         : "Rendered without burned subtitles (subtitle filter unavailable or no subtitle chunks).",
+      effectiveSubtitleStyle.backgroundRadius > 0
+        ? "Rounded subtitle box corners are preview-only right now; FFmpeg drawtext export uses square boxes."
+        : "Subtitle box corners exported as square boxes.",
     ];
 
     return {

@@ -66,10 +66,12 @@ import {
 import type { CreatorShortExportRecord, CreatorShortProjectRecord } from "@/lib/creator/storage";
 import { exportShortVideoLocally } from "@/lib/creator/local-render";
 import {
+  COMMON_SUBTITLE_STYLE_PRESETS,
   CREATOR_SUBTITLE_STYLE_LABELS,
   cssRgbaFromHex,
   getDefaultCreatorSubtitleStyle,
   resolveCreatorSubtitleStyle,
+  wrapSubtitleLines,
 } from "@/lib/creator/subtitle-style";
 import { useCreatorHub } from "@/hooks/useCreatorHub";
 import { useHistoryLibrary } from "@/hooks/useHistoryLibrary";
@@ -154,9 +156,17 @@ function formatBytes(bytes: number): string {
   return `${value >= 10 || power === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[power]}`;
 }
 
-async function readVideoDimensions(file: File, existingVideoEl?: HTMLVideoElement | null): Promise<{ width: number; height: number }> {
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+async function readVideoMetadata(
+  file: File,
+  existingVideoEl?: HTMLVideoElement | null
+): Promise<{ width: number; height: number; durationSeconds?: number }> {
   if (existingVideoEl?.videoWidth && existingVideoEl?.videoHeight) {
-    return { width: existingVideoEl.videoWidth, height: existingVideoEl.videoHeight };
+    const duration = Number.isFinite(existingVideoEl.duration) && existingVideoEl.duration > 0 ? existingVideoEl.duration : undefined;
+    return { width: existingVideoEl.videoWidth, height: existingVideoEl.videoHeight, durationSeconds: duration };
   }
 
   const url = URL.createObjectURL(file);
@@ -173,10 +183,41 @@ async function readVideoDimensions(file: File, existingVideoEl?: HTMLVideoElemen
     if (!video.videoWidth || !video.videoHeight) {
       throw new Error("Source video metadata missing dimensions");
     }
-    return { width: video.videoWidth, height: video.videoHeight };
+    const duration = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : undefined;
+    return { width: video.videoWidth, height: video.videoHeight, durationSeconds: duration };
   } finally {
     URL.revokeObjectURL(url);
   }
+}
+
+function clampClipToMediaDuration(clip: CreatorViralClip, mediaDurationSeconds: number): CreatorViralClip {
+  const safeDuration = Number.isFinite(mediaDurationSeconds) ? mediaDurationSeconds : 0;
+  if (safeDuration <= 0) return clip;
+
+  const minClipDuration = 0.5;
+  const rawDuration =
+    Number.isFinite(clip.durationSeconds) && clip.durationSeconds > 0
+      ? clip.durationSeconds
+      : Math.max(0, clip.endSeconds - clip.startSeconds);
+  const targetDuration = clampNumber(rawDuration, minClipDuration, safeDuration);
+  const maxStart = Math.max(0, safeDuration - targetDuration);
+
+  let start = Number.isFinite(clip.startSeconds) ? clip.startSeconds : 0;
+  start = clampNumber(start, 0, maxStart);
+  let end = start + targetDuration;
+
+  if (end > safeDuration) {
+    end = safeDuration;
+    start = Math.max(0, end - targetDuration);
+  }
+  const duration = Math.max(minClipDuration, end - start);
+
+  return {
+    ...clip,
+    startSeconds: Number(start.toFixed(3)),
+    endSeconds: Number(end.toFixed(3)),
+    durationSeconds: Number(duration.toFixed(3)),
+  };
 }
 
 const VIDEO_INFO_BLOCK_OPTIONS: Array<{
@@ -700,9 +741,10 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
   const buildCurrentShortProjectRecord = useCallback(
     (
       status: CreatorShortProjectRecord["status"],
-      options?: { id?: string; lastExportId?: string; lastError?: string }
+      options?: { id?: string; lastExportId?: string; lastError?: string; clipOverride?: CreatorViralClip }
     ): CreatorShortProjectRecord | null => {
-      if (!selectedProject || !selectedTranscript || !selectedSubtitle || !editedClip || !selectedPlan) return null;
+      const effectiveClip = options?.clipOverride ?? editedClip;
+      if (!selectedProject || !selectedTranscript || !selectedSubtitle || !effectiveClip || !selectedPlan) return null;
       return buildShortProjectRecord({
         status,
         now: Date.now(),
@@ -712,7 +754,7 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
         sourceFilename: mediaFilename || selectedProject.filename,
         transcriptId: selectedTranscript.id,
         subtitleId: selectedSubtitle.id,
-        clip: editedClip,
+        clip: effectiveClip,
         plan: selectedPlan,
         editor: currentEditorState,
         savedRecords: savedShortProjects,
@@ -820,8 +862,44 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
     setExportProgressPct(0);
     setLocalRenderError(null);
 
+    let sourceVideoMeta: { width: number; height: number; durationSeconds?: number } | null = null;
+    let exportClip = editedClip;
+    let exportSubtitleChunks = selectedClipSubtitleChunks;
+
+    try {
+      sourceVideoMeta = await readVideoMetadata(mediaFile, previewVideoRef.current);
+      if (typeof sourceVideoMeta.durationSeconds === "number" && Number.isFinite(sourceVideoMeta.durationSeconds)) {
+        const clampedClip = clampClipToMediaDuration(editedClip, sourceVideoMeta.durationSeconds);
+        const wasAdjusted =
+          Math.abs(clampedClip.startSeconds - editedClip.startSeconds) > 0.02 ||
+          Math.abs(clampedClip.endSeconds - editedClip.endSeconds) > 0.02;
+        if (wasAdjusted) {
+          exportClip = clampedClip;
+          exportSubtitleChunks = clipSubtitleChunks(clampedClip, selectedSubtitle.chunks);
+          toast(
+            `Clip adjusted to media range: ${secondsToClock(clampedClip.startSeconds)} → ${secondsToClock(clampedClip.endSeconds)}.`,
+            {
+            className: "bg-amber-500/20 border-amber-500/50 text-amber-100",
+            }
+          );
+        }
+      }
+      if (!Number.isFinite(exportClip.durationSeconds) || exportClip.durationSeconds < 0.25) {
+        throw new Error("Selected clip is too short to export. Increase duration to at least 0.25s.");
+      }
+    } catch (metadataError) {
+      console.error(metadataError);
+      setIsExportingShort(false);
+      const message = metadataError instanceof Error ? metadataError.message : "Failed to read source video metadata";
+      toast.error(message, {
+        className: "bg-red-500/20 border-red-500/50 text-red-100",
+      });
+      return;
+    }
+
     let shortProjectRecord = buildCurrentShortProjectRecord("exporting", {
       id: activeSavedShortProjectId || undefined,
+      clipOverride: exportClip,
     });
     if (!shortProjectRecord) {
       setIsExportingShort(false);
@@ -833,7 +911,9 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
       setActiveSavedShortProjectId(shortProjectRecord.id);
       setShortProjectNameDraft(shortProjectRecord.name);
 
-      const sourceVideoSize = await readVideoDimensions(mediaFile, previewVideoRef.current);
+      const sourceVideoSize = sourceVideoMeta
+        ? { width: sourceVideoMeta.width, height: sourceVideoMeta.height }
+        : await readVideoMetadata(mediaFile, previewVideoRef.current);
       const frameRect = previewFrameRef.current?.getBoundingClientRect();
       const previewViewport = frameRect ? { width: frameRect.width, height: frameRect.height } : null;
 
@@ -847,9 +927,9 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
       const localExport = await exportShortVideoLocally({
         sourceFile: mediaFile,
         sourceFilename: mediaFilename || selectedProject.filename,
-        clip: editedClip,
+        clip: exportClip,
         plan: selectedPlan,
-        subtitleChunks: selectedClipSubtitleChunks,
+        subtitleChunks: exportSubtitleChunks,
         editor: currentEditorState,
         sourceVideoSize,
         previewViewport,
@@ -863,7 +943,7 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
         sourceProjectId: selectedProject.id,
         sourceFilename: mediaFilename || selectedProject.filename,
         plan: selectedPlan,
-        clip: editedClip,
+        clip: exportClip,
         editor: currentEditorState,
         createdAt: Date.now(),
         filename: localExport.file.name,
@@ -943,6 +1023,13 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
     if (!previewSubtitleLine) return "";
     return resolvedSubtitleStyle.textCase === "uppercase" ? previewSubtitleLine.toUpperCase() : previewSubtitleLine;
   }, [previewSubtitleLine, resolvedSubtitleStyle.textCase]);
+
+  const previewWrappedSubtitleLine = useMemo(() => {
+    if (!previewSubtitleDisplayLine) return "";
+    const fontSize = Math.round(clampNumber(56 * subtitleScale, 36, 96));
+    const maxCharsPerLine = Math.max(10, Math.round((1080 * 0.8) / (fontSize * 0.55)));
+    return wrapSubtitleLines(previewSubtitleDisplayLine, maxCharsPerLine).join("\n");
+  }, [previewSubtitleDisplayLine, subtitleScale]);
 
   const clipProgressPct = useMemo(() => {
     if (!editedClip) return 0;
@@ -1802,7 +1889,7 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
                             </>
                           )}
 
-                          {previewSubtitleDisplayLine && (
+                          {previewWrappedSubtitleLine && (
                             <div
                               className="absolute text-center transition-opacity duration-150"
                               style={{
@@ -1813,6 +1900,7 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
                                 paddingInline: `${resolvedSubtitleStyle.backgroundPadding}px`,
                                 paddingBlock: `${Math.max(4, Math.round(resolvedSubtitleStyle.backgroundPadding * 0.55))}px`,
                                 backgroundColor: cssRgbaFromHex(resolvedSubtitleStyle.backgroundColor, resolvedSubtitleStyle.backgroundOpacity),
+                                borderRadius: `${resolvedSubtitleStyle.backgroundRadius}px`,
                                 fontFamily: "var(--font-inter), 'Inter', sans-serif",
                               }}
                             >
@@ -1820,15 +1908,17 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
                                 className="text-sm leading-tight"
                                 style={{
                                   color: resolvedSubtitleStyle.textColor,
-                                  fontWeight: resolvedSubtitleStyle.preset === "clean_caption" ? 600 : 700,
-                                  WebkitTextStroke: `${(resolvedSubtitleStyle.outlineWidth * 0.32).toFixed(2)}px ${cssRgbaFromHex(
+                                  whiteSpace: "pre-line",
+                                  textAlign: "center",
+                                  fontWeight: 500,
+                                  WebkitTextStroke: `${(resolvedSubtitleStyle.outlineWidth * 0.2).toFixed(2)}px ${cssRgbaFromHex(
                                     resolvedSubtitleStyle.outlineColor,
                                     0.95
                                   )}`,
                                   paintOrder: "stroke fill",
                                 }}
                               >
-                                {previewSubtitleDisplayLine}
+                                {previewWrappedSubtitleLine}
                               </div>
                             </div>
                           )}
@@ -2028,6 +2118,25 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
                             <input type="range" min={10} max={90} step={1} value={subtitleXPositionPct} onChange={(e) => setSubtitleXPositionPct(Number(e.target.value))} className="w-full" />
                             <label className="text-xs text-white/70 block">Subtitle vertical position: {subtitleYOffsetPct.toFixed(0)}%</label>
                             <input type="range" min={45} max={92} step={1} value={subtitleYOffsetPct} onChange={(e) => setSubtitleYOffsetPct(Number(e.target.value))} className="w-full" />
+                            <div className="space-y-2 pt-1">
+                              <div className="text-xs text-white/70">Quick styles</div>
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                {COMMON_SUBTITLE_STYLE_PRESETS.map((quick) => (
+                                  <button
+                                    key={quick.id}
+                                    type="button"
+                                    onClick={() => {
+                                      setSubtitleStyleOverrides(quick.style);
+                                      setActiveSavedShortProjectId("");
+                                    }}
+                                    className="rounded-lg border border-white/10 bg-white/5 hover:bg-white/10 text-left p-2 transition-colors"
+                                  >
+                                    <div className="text-xs font-semibold text-white/90">{quick.name}</div>
+                                    <div className="text-[11px] text-white/55 mt-0.5 leading-relaxed">{quick.description}</div>
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
                               <label className="text-xs text-white/70 block">
                                 Text color
@@ -2129,6 +2238,22 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
                               }}
                               className="w-full"
                             />
+                            <label className="text-xs text-white/70 block">Background roundness: {resolvedSubtitleStyle.backgroundRadius.toFixed(0)}px</label>
+                            <input
+                              type="range"
+                              min={0}
+                              max={40}
+                              step={1}
+                              value={resolvedSubtitleStyle.backgroundRadius}
+                              onChange={(e) => {
+                                setSubtitleStyleOverrides((prev) => ({ ...prev, backgroundRadius: Number(e.target.value) }));
+                                setActiveSavedShortProjectId("");
+                              }}
+                              className="w-full"
+                            />
+                            <div className="text-[11px] text-white/45 leading-relaxed">
+                              Rounded subtitle corners are shown in preview. Export currently uses FFmpeg drawtext boxes, which keep square corners.
+                            </div>
                             <label className="text-xs text-white/70 block">
                               Text case
                               <Select

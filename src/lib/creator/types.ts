@@ -134,6 +134,7 @@ export interface CreatorSubtitleStyleSettings {
   textColor: string;
   backgroundColor: string;
   backgroundOpacity: number;
+  backgroundRadius: number;
   outlineColor: string;
   outlineWidth: number;
   backgroundPadding: number;

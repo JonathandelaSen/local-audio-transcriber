@@ -1,12 +1,13 @@
 # Neural Whisper (Local Audio & Video Transcriber + Creator Hub)
 
 <div align="center">
-  <img src="./docs/main.png" alt="Main Screen" width="80%" />
+  <img src="./docs/creator_hub.png" alt="Main Screen" width="80%" />
 </div>
+
 <div align="center">
-  <img src="./docs/processing.png" alt="Processing Screen" width="30%" />
-  <img src="./docs/processed.png" alt="Processed Screen" width="30%" />
-  <img src="./docs/history.png" alt="History Screen" width="30%" />
+  <img src="./docs/creator_shorts.png" alt="Video Info Studio Screen" width="30%" />
+  <img src="./docs/creator_video_info.png" alt="Creator Hub Screen" width="30%" />
+  <img src="./docs/creator_shorts_export.png" alt="Shorts Forge Screen" width="30%" />
 </div>
 
 A modern, privacy-first web application built with [Next.js](http://nextjs.org) that allows users to seamlessly drag and drop audio and video files to receive highly accurate transcriptions. It also features built-in creator tools to plan, edit, and render short-form videos completely locally.
