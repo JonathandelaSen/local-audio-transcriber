@@ -115,35 +115,75 @@ function buildDrawtextSubtitleFilters(
   const fontSize = Math.round(clamp(56 * editor.subtitleScale, 36, 96));
   // Estimate max chars per line: ~80% of output width / (fontSize * 0.55 avg char width)
   const maxCharsPerLine = Math.max(10, Math.round((OUTPUT_WIDTH * 0.80) / (fontSize * 0.55)));
-  const x = `(w*${(editor.subtitleXPositionPct / 100).toFixed(4)}-tw/2)`;
-  const y = `(h*${(editor.subtitleYOffsetPct / 100).toFixed(4)}-th/2)`;
+
+  // Scale padding proportionally to fontSize (style values are calibrated for ~14 px CSS preview font).
+  const PREVIEW_BASE_FONT_PX = 14;
+  const paddingScale = fontSize / PREVIEW_BASE_FONT_PX;
+  const scaledPaddingH = Math.round(style.backgroundPadding * paddingScale);
+  const scaledPaddingV = Math.max(Math.round(scaledPaddingH * 0.55), 4);
+
+  // Line height: 1.18× font size (matches the CSS preview line spacing).
+  const lineHeight = Math.round(fontSize * 1.18);
+
+  const xPct = (editor.subtitleXPositionPct / 100).toFixed(4);
+  const yPct = (editor.subtitleYOffsetPct / 100).toFixed(4);
 
   return chunks.flatMap((chunk) => {
     const transformed = style.textCase === "uppercase" ? chunk.text.toUpperCase() : chunk.text;
     const lines = wrapSubtitleLines(transformed, maxCharsPerLine);
-    const lineStep = Math.round(fontSize * 1.18);
-    const centerIndex = (lines.length - 1) / 2;
 
-    return lines.map((line, lineIndex) => {
+    // Strategy: drawbox draws ONE unified background rectangle (no per-line overlap / alpha seams).
+    // drawtext lines are drawn WITHOUT box on top of it.
+    const maxLineChars = Math.max(...lines.map((l) => l.length));
+    const estTextW = Math.round(maxLineChars * fontSize * 0.58);
+    const boxW = Math.min(estTextW + 2 * scaledPaddingH, Math.round(OUTPUT_WIDTH * 0.92));
+    const totalTextH = lines.length * lineHeight;
+    const boxH = totalTextH + 2 * scaledPaddingV;
+
+    // Box top-left (centered at the anchor point).
+    const boxX = `(w*${xPct}-${Math.round(boxW / 2)})`;
+    const boxY = `(h*${yPct}-${Math.round(boxH / 2)})`;
+
+    const enableExpr = `between(t,${(chunk.start + timeOffsetSeconds).toFixed(3)},${(chunk.end + timeOffsetSeconds).toFixed(3)})`;
+    const filters: string[] = [];
+
+    // 1. Single drawbox — one rectangle, no alpha seams.
+    if (style.backgroundOpacity > 0) {
+      filters.push(
+        `drawbox` +
+        `=x=${boxX}` +
+        `:y=${boxY}` +
+        `:w=${boxW}` +
+        `:h=${boxH}` +
+        `:color=${ffmpegColorWithAlpha(style.backgroundColor, style.backgroundOpacity)}` +
+        `:t=fill` +
+        `:enable='${enableExpr}'`
+      );
+    }
+
+    // 2. One drawtext per line with box=0 — each line centered horizontally via tw.
+    lines.forEach((line, i) => {
       const escaped = drawtextEscape(line);
-      const offsetPx = (lineIndex - centerIndex) * lineStep;
-      const yWithOffset = offsetPx === 0 ? y : `(${y}${offsetPx >= 0 ? "+" : ""}${offsetPx.toFixed(2)})`;
+      // y of this line: start from the top of the text block (inside the box padding).
+      const blockTopOffset = Math.round(boxH / 2) - scaledPaddingV;
+      const lineYExpr = `(h*${yPct}-${blockTopOffset - i * lineHeight})`;
 
-      return (
+      filters.push(
         `drawtext=fontfile=${FONT_PATH}` +
         `:text='${escaped}'` +
         `:fontsize=${fontSize}` +
         `:fontcolor=${ffmpegHexColorFromCss(style.textColor)}` +
+        `:fix_bounds=1` +
         `:borderw=${style.outlineWidth.toFixed(2)}` +
         `:bordercolor=${ffmpegHexColorFromCss(style.outlineColor)}` +
-        `:box=1` +
-        `:boxcolor=${ffmpegColorWithAlpha(style.backgroundColor, style.backgroundOpacity)}` +
-        `:boxborderw=${style.backgroundPadding.toFixed(2)}` +
-        `:x=${x}` +
-        `:y=${yWithOffset}` +
-        `:enable='between(t,${(chunk.start + timeOffsetSeconds).toFixed(3)},${(chunk.end + timeOffsetSeconds).toFixed(3)})'`
+        `:box=0` +
+        `:x=(w*${xPct}-tw/2)` +
+        `:y=${lineYExpr}` +
+        `:enable='${enableExpr}'`
       );
     });
+
+    return filters;
   });
 }
 

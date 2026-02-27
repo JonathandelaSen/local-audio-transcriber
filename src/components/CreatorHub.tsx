@@ -389,8 +389,21 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
   const [isPlaying, setIsPlaying] = useState(false);
   const [isMuted, setIsMuted] = useState(true);
   const [currentTime, setCurrentTime] = useState(0);
+  const [previewFrameWidth, setPreviewFrameWidth] = useState(0);
   const previewVideoRef = useRef<HTMLVideoElement | null>(null);
-  const previewFrameRef = useRef<HTMLDivElement | null>(null);
+  const previewFrameElRef = useRef<HTMLDivElement | null>(null);
+  // useCallback ref: stores element in previewFrameElRef AND sets up ResizeObserver for previewFrameWidth.
+  const previewFrameRef = useCallback((el: HTMLDivElement | null) => {
+    previewFrameElRef.current = el;
+    if (!el) return;
+    setPreviewFrameWidth(el.getBoundingClientRect().width);
+    const ro = new ResizeObserver((entries) => {
+      const w = entries[0]?.contentRect.width ?? 0;
+      if (w > 0) setPreviewFrameWidth(w);
+    });
+    ro.observe(el);
+    // ResizeObserver is GC'd when the element is removed from the DOM.
+  }, []);
 
   useEffect(() => {
     if (lockedTool && activeTool !== lockedTool) {
@@ -982,7 +995,7 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
       const sourceVideoSize = sourceVideoMeta
         ? { width: sourceVideoMeta.width, height: sourceVideoMeta.height }
         : await readVideoMetadata(mediaFile, previewVideoRef.current);
-      const frameRect = previewFrameRef.current?.getBoundingClientRect();
+      const frameRect = previewFrameElRef.current?.getBoundingClientRect();
       const previewViewport = frameRect ? { width: frameRect.width, height: frameRect.height } : null;
 
       // NOTE: We intentionally pass null for previewVideoRect.
@@ -1102,10 +1115,14 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
 
   const previewWrappedSubtitleLine = useMemo(() => {
     if (!previewSubtitleDisplayLine) return "";
+    // Use the exact same fontSize + maxCharsPerLine formula as FFmpeg export so wrapping matches 1:1.
     const fontSize = Math.round(clampNumber(56 * subtitleScale, 36, 96));
     const maxCharsPerLine = Math.max(10, Math.round((1080 * 0.8) / (fontSize * 0.55)));
     return wrapSubtitleLines(previewSubtitleDisplayLine, maxCharsPerLine).join("\n");
   }, [previewSubtitleDisplayLine, subtitleScale]);
+
+  // Export-equivalent font size (px at 1080-wide canvas) – used to derive preview CSS values.
+  const exportFontSize = Math.round(clampNumber(56 * subtitleScale, 36, 96));
 
   const clipProgressPct = useMemo(() => {
     if (!editedClip) return 0;
@@ -1965,39 +1982,58 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
                             </>
                           )}
 
-                          {previewWrappedSubtitleLine && (
-                            <div
-                              className="absolute text-center transition-opacity duration-150"
-                              style={{
-                                left: `${subtitleXPositionPct}%`,
-                                top: `${subtitleYOffsetPct}%`,
-                                transform: `translate(-50%, -50%) scale(${subtitleScale})`,
-                                maxWidth: "80%",
-                                paddingInline: `${resolvedSubtitleStyle.backgroundPadding}px`,
-                                paddingBlock: `${Math.max(4, Math.round(resolvedSubtitleStyle.backgroundPadding * 0.55))}px`,
-                                backgroundColor: cssRgbaFromHex(resolvedSubtitleStyle.backgroundColor, resolvedSubtitleStyle.backgroundOpacity),
-                                borderRadius: `${resolvedSubtitleStyle.backgroundRadius}px`,
-                                fontFamily: "var(--font-inter), 'Inter', sans-serif",
-                              }}
-                            >
+                          {previewWrappedSubtitleLine && (() => {
+                            // Render the preview subtitle in the same coordinate space as the FFmpeg export.
+                            // previewScale maps the 1080 px export canvas onto the preview frame pixels.
+                            const previewScale = previewFrameWidth > 0 ? previewFrameWidth / 1080 : 1;
+                            // Font size proportional to export (exportFontSize is in 1080-px space).
+                            const cssFontSize = exportFontSize * previewScale;
+                            // Padding: match the export's scaled padding (backgroundPadding * exportFontSize / 14).
+                            const PREVIEW_BASE_FONT_PX = 14;
+                            const paddingScale = exportFontSize / PREVIEW_BASE_FONT_PX;
+                            const exportPadH = Math.round(resolvedSubtitleStyle.backgroundPadding * paddingScale);
+                            const exportPadV = Math.max(Math.round(exportPadH * 0.55), 4);
+                            const cssPadH = exportPadH * previewScale;
+                            const cssPadV = exportPadV * previewScale;
+                            // Max width: 80 % of the 1080 px canvas scaled to preview.
+                            const cssMaxWidth = 1080 * 0.80 * previewScale;
+                            // Line height: match FFmpeg's 1.18× line step.
+                            const cssLineHeight = exportFontSize * 1.18 * previewScale;
+                            // Outline: export uses borderw = outlineWidth (in 1080-px px); scale to preview.
+                            const cssOutline = resolvedSubtitleStyle.outlineWidth * previewScale;
+                            return (
                               <div
-                                className="text-sm leading-tight"
+                                className="absolute text-center transition-opacity duration-150"
                                 style={{
-                                  color: resolvedSubtitleStyle.textColor,
-                                  whiteSpace: "pre-line",
-                                  textAlign: "center",
-                                  fontWeight: 500,
-                                  WebkitTextStroke: `${(resolvedSubtitleStyle.outlineWidth * 0.2).toFixed(2)}px ${cssRgbaFromHex(
-                                    resolvedSubtitleStyle.outlineColor,
-                                    0.95
-                                  )}`,
-                                  paintOrder: "stroke fill",
+                                  left: `${subtitleXPositionPct}%`,
+                                  top: `${subtitleYOffsetPct}%`,
+                                  transform: "translate(-50%, -50%)",
+                                  maxWidth: `${cssMaxWidth}px`,
+                                  width: "max-content",
+                                  paddingInline: `${cssPadH}px`,
+                                  paddingBlock: `${cssPadV}px`,
+                                  backgroundColor: cssRgbaFromHex(resolvedSubtitleStyle.backgroundColor, resolvedSubtitleStyle.backgroundOpacity),
+                                  borderRadius: `${resolvedSubtitleStyle.backgroundRadius * previewScale}px`,
+                                  fontFamily: "var(--font-inter), 'Inter', sans-serif",
                                 }}
                               >
-                                {previewWrappedSubtitleLine}
+                                <div
+                                  style={{
+                                    fontSize: `${cssFontSize}px`,
+                                    lineHeight: `${cssLineHeight}px`,
+                                    color: resolvedSubtitleStyle.textColor,
+                                    whiteSpace: "pre-line",
+                                    textAlign: "center",
+                                    fontWeight: 700,
+                                    WebkitTextStroke: `${cssOutline.toFixed(2)}px ${cssRgbaFromHex(resolvedSubtitleStyle.outlineColor, 0.95)}`,
+                                    paintOrder: "stroke fill",
+                                  }}
+                                >
+                                  {previewWrappedSubtitleLine}
+                                </div>
                               </div>
-                            </div>
-                          )}
+                            );
+                          })()}
 
                           {/* Playback controls overlay at bottom of frame */}
                           {isVideoMedia && mediaUrl && (
