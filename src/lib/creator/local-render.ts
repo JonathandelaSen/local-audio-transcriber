@@ -16,6 +16,15 @@ import type { SubtitleChunk } from "@/lib/history";
 const OUTPUT_WIDTH = 1080;
 const OUTPUT_HEIGHT = 1920;
 const FAST_SEEK_CUSHION_SECONDS = 3;
+const LOCAL_EXPORT_PROGRESS = {
+  init: 1,
+  mounted: 4,
+  preRender: 8,
+  renderMax: 92,
+  readOutput: 94,
+  validateOutput: 95,
+  packaged: 96,
+} as const;
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
@@ -197,24 +206,55 @@ export async function exportShortVideoLocally(input: LocalShortExportInput): Pro
     input.onProgress?.(lastProgressPct);
   };
 
+  const emitRenderProgress = (renderPct: number) => {
+    const safe = clamp(renderPct, 0, 100);
+    const span = LOCAL_EXPORT_PROGRESS.renderMax - LOCAL_EXPORT_PROGRESS.preRender;
+    const mapped = LOCAL_EXPORT_PROGRESS.preRender + (safe / 100) * span;
+    emitProgress(mapped);
+  };
+
+  let progressTimeBaselineSeconds: number | null = null;
+  let logTimeBaselineSeconds: number | null = null;
+  const resetProgressTimeBaselines = () => {
+    progressTimeBaselineSeconds = null;
+    logTimeBaselineSeconds = null;
+  };
+  const normalizeProcessedSeconds = (seconds: number, source: "progress" | "log"): number => {
+    if (!Number.isFinite(seconds) || seconds <= 0) return 0;
+    const baseline = source === "progress" ? progressTimeBaselineSeconds : logTimeBaselineSeconds;
+    if (baseline == null || seconds + 0.25 < baseline) {
+      if (source === "progress") {
+        progressTimeBaselineSeconds = seconds;
+      } else {
+        logTimeBaselineSeconds = seconds;
+      }
+      return 0;
+    }
+    return Math.max(0, seconds - baseline);
+  };
+
   const runFfmpegExecWithFallbackProgress = async (args: string[]) => {
-    const startPct = Math.max(lastProgressPct, 8);
+    const startPct = Math.max(lastProgressPct, LOCAL_EXPORT_PROGRESS.preRender);
     const startedAt = Date.now();
     const quickRampMs = Math.max(4_000, clipDuration * 2_500);
     const tailTauMs = Math.max(12_000, clipDuration * 5_000);
+    const quickTarget = 82;
+    const fallbackCeiling = LOCAL_EXPORT_PROGRESS.renderMax - 1;
+
+    resetProgressTimeBaselines();
 
     const timer = setInterval(() => {
       const elapsed = Date.now() - startedAt;
       if (elapsed <= quickRampMs) {
         const linear = clamp(elapsed / quickRampMs, 0, 1);
         const eased = 1 - Math.pow(1 - linear, 3);
-        emitProgress(startPct + (94 - startPct) * eased);
+        emitProgress(startPct + (quickTarget - startPct) * eased);
         return;
       }
 
       const tailElapsed = elapsed - quickRampMs;
       const tailEased = 1 - Math.exp(-tailElapsed / tailTauMs);
-      emitProgress(94 + (99 - 94) * tailEased);
+      emitProgress(quickTarget + (fallbackCeiling - quickTarget) * tailEased);
     }, 250);
 
     try {
@@ -225,15 +265,18 @@ export async function exportShortVideoLocally(input: LocalShortExportInput): Pro
   };
 
   const progressHandler = ({ progress, time }: { progress: number; time: number }) => {
-    // ffmpeg.wasm progress can be unreliable with input-seeking; use time-based fallback
-    let pct = 0;
-    if (Number.isFinite(progress) && progress > 0) {
-      pct = progress <= 1 ? progress * 100 : progress;
-    } else if (Number.isFinite(time) && time > 0) {
-      // time is in microseconds of output processed
-      pct = Math.min(100, (time / 1_000_000 / clipDuration) * 100);
+    // ffmpeg.wasm progress can be unreliable with input-seeking.
+    // Prefer elapsed output time and map it only inside render-stage progress.
+    if (Number.isFinite(time) && time > 0) {
+      const processedSeconds = normalizeProcessedSeconds(time / 1_000_000, "progress");
+      if (processedSeconds > 0) {
+        emitRenderProgress((processedSeconds / clipDuration) * 100);
+        return;
+      }
     }
-    emitProgress(pct);
+    if (Number.isFinite(progress) && progress > 0 && progress <= 1.05) {
+      emitRenderProgress(progress * 100);
+    }
   };
   ff.on("progress", progressHandler);
 
@@ -244,9 +287,11 @@ export async function exportShortVideoLocally(input: LocalShortExportInput): Pro
       ffmpegLogTail.push(text);
       if (ffmpegLogTail.length > 40) ffmpegLogTail.shift();
     }
-    const processedSeconds = parseFfmpegLogProgressSeconds(String(message ?? ""));
-    if (processedSeconds == null || processedSeconds <= 0) return;
-    emitProgress((processedSeconds / clipDuration) * 100);
+    const rawSeconds = parseFfmpegLogProgressSeconds(String(message ?? ""));
+    if (rawSeconds == null || rawSeconds <= 0) return;
+    const processedSeconds = normalizeProcessedSeconds(rawSeconds, "log");
+    if (processedSeconds <= 0) return;
+    emitRenderProgress((processedSeconds / clipDuration) * 100);
   };
   ff.on("log", logHandler);
 
@@ -284,7 +329,7 @@ export async function exportShortVideoLocally(input: LocalShortExportInput): Pro
 
   const renderWithSeekFallback = async (filter: string): Promise<"hybrid" | "exact"> => {
     try {
-      emitProgress(8);
+      emitProgress(LOCAL_EXPORT_PROGRESS.preRender);
       await runFfmpegExecWithFallbackProgress(buildFfmpegArgs(filter, "hybrid"));
       return "hybrid";
     } catch (hybridError) {
@@ -292,7 +337,7 @@ export async function exportShortVideoLocally(input: LocalShortExportInput): Pro
       try {
         await ff.deleteFile(outputPath);
       } catch {}
-      emitProgress(8);
+      emitProgress(LOCAL_EXPORT_PROGRESS.preRender);
       await runFfmpegExecWithFallbackProgress(buildFfmpegArgs(filter, "exact"));
       return "exact";
     }
@@ -302,10 +347,10 @@ export async function exportShortVideoLocally(input: LocalShortExportInput): Pro
   let usedSeekMode: "hybrid" | "exact" = "hybrid";
 
   try {
-    emitProgress(1);
+    emitProgress(LOCAL_EXPORT_PROGRESS.init);
     await ff.createDir(mountDir);
     await ff.mount("WORKERFS" as never, { files: [input.sourceFile] }, mountDir);
-    emitProgress(4);
+    emitProgress(LOCAL_EXPORT_PROGRESS.mounted);
 
     // Attempt subtitle burn-in with drawtext filters
     if (subtitleDrawtextFilters.length > 0) {
@@ -329,7 +374,7 @@ export async function exportShortVideoLocally(input: LocalShortExportInput): Pro
       usedSeekMode = await renderWithSeekFallback(baseFilter);
     }
 
-    emitProgress(98);
+    emitProgress(LOCAL_EXPORT_PROGRESS.readOutput);
     const output = await ff.readFile(outputPath);
     if (typeof output === "string") {
       throw new Error("FFmpeg returned text output instead of binary video data");
@@ -338,9 +383,10 @@ export async function exportShortVideoLocally(input: LocalShortExportInput): Pro
     if (data.byteLength < 1024) {
       throw new Error("Rendered output is empty. Clip timing may be outside the source video range.");
     }
+    emitProgress(LOCAL_EXPORT_PROGRESS.validateOutput);
     const arrayBuffer = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
     const file = new File([arrayBuffer], outputFilename, { type: "video/mp4" });
-    emitProgress(100);
+    emitProgress(LOCAL_EXPORT_PROGRESS.packaged);
 
     const ffmpegCommandPreview =
       usedSeekMode === "hybrid"

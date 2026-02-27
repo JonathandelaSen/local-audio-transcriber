@@ -907,6 +907,12 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
     setExportProgressPct(0);
     setLocalRenderError(null);
     setLocalRenderDiagnostics(null);
+    const bumpExportProgress = (nextPct: number) => {
+      setExportProgressPct((prev) => {
+        const next = Math.round(clampNumber(nextPct, 0, 100));
+        return next > prev ? next : prev;
+      });
+    };
 
     let sourceVideoMeta: { width: number; height: number; durationSeconds?: number } | null = null;
     let exportClip = editedClip;
@@ -996,8 +1002,9 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
         sourceVideoSize,
         previewViewport,
         previewVideoRect: null,
-        onProgress: setExportProgressPct,
+        onProgress: bumpExportProgress,
       });
+      bumpExportProgress(97);
 
       const exportRecord = buildCompletedShortExportRecord({
         id: makeId("shortexport"),
@@ -1017,12 +1024,14 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
       });
 
       await upsertExport(exportRecord);
+      bumpExportProgress(98);
 
       shortProjectRecord = markShortProjectExported(shortProjectRecord, {
         now: Date.now(),
         exportId: exportRecord.id,
       });
       await upsertProject(shortProjectRecord);
+      bumpExportProgress(99);
 
       const renderResult = buildLocalBrowserRenderResponse({
         jobId: exportRecord.id,
@@ -1036,6 +1045,7 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
       setLastRender(renderResult);
 
       handleDownloadSavedExport(exportRecord);
+      bumpExportProgress(100);
       toast.success(`Short exported and saved (${formatBytes(exportRecord.sizeBytes)})`, {
         className: "bg-green-500/20 border-green-500/50 text-green-100",
       });
@@ -2420,7 +2430,11 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
                                 className="bg-gradient-to-r from-fuchsia-500 to-cyan-400 text-black font-semibold hover:from-fuchsia-400 hover:to-cyan-300"
                               >
                                 {isExportingShort ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <HardDriveDownload className="w-4 h-4 mr-2" />}
-                                {isExportingShort ? `Exporting ${exportProgressPct}%` : "Export Short (Local)"}
+                                {isExportingShort
+                                  ? exportProgressPct >= 97
+                                    ? `Finalizing ${exportProgressPct}%`
+                                    : `Exporting ${exportProgressPct}%`
+                                  : "Export Short (Local)"}
                               </Button>
                               <Button
                                 variant="ghost"
@@ -2450,7 +2464,11 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
                                     style={{ width: `${Math.max(4, exportProgressPct)}%` }}
                                   />
                                 </div>
-                                <div className="text-xs text-white/55">Local ffmpeg.wasm export in progress… keep this tab open.</div>
+                                <div className="text-xs text-white/55">
+                                  {exportProgressPct >= 97
+                                    ? "Render complete. Saving export file to local library… keep this tab open."
+                                    : "Local ffmpeg.wasm render in progress… keep this tab open."}
+                                </div>
                               </div>
                             )}
                             {localRenderError && (
