@@ -160,13 +160,54 @@ function clampNumber(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
+type ShortExportDiagnosticsContext = {
+  sourceFilename: string;
+  platform: CreatorShortPlan["platform"];
+  requestedClip: CreatorViralClip;
+  exportClip: CreatorViralClip;
+  sourceMeta?: { width: number; height: number; durationSeconds?: number } | null;
+  selectedSubtitleChunkCount: number;
+  exportSubtitleChunkCount: number;
+  stylePreset: string;
+  errorMessage?: string;
+};
+
+function buildShortExportDiagnostics(context: ShortExportDiagnosticsContext): string {
+  const sourceDuration =
+    typeof context.sourceMeta?.durationSeconds === "number" && Number.isFinite(context.sourceMeta.durationSeconds)
+      ? context.sourceMeta.durationSeconds.toFixed(3)
+      : "unknown";
+
+  return [
+    `source=${context.sourceFilename}`,
+    `platform=${context.platform}`,
+    `sourceSize=${context.sourceMeta?.width ?? "?"}x${context.sourceMeta?.height ?? "?"}`,
+    `sourceDurationSec=${sourceDuration}`,
+    `requestedClip=${context.requestedClip.startSeconds.toFixed(3)}-${context.requestedClip.endSeconds.toFixed(3)} (${context.requestedClip.durationSeconds.toFixed(3)}s)`,
+    `exportClip=${context.exportClip.startSeconds.toFixed(3)}-${context.exportClip.endSeconds.toFixed(3)} (${context.exportClip.durationSeconds.toFixed(3)}s)`,
+    `selectedSubtitleChunks=${context.selectedSubtitleChunkCount}`,
+    `exportSubtitleChunks=${context.exportSubtitleChunkCount}`,
+    `subtitleStylePreset=${context.stylePreset}`,
+    context.errorMessage ? `error=${context.errorMessage}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
 async function readVideoMetadata(
   file: File,
   existingVideoEl?: HTMLVideoElement | null
 ): Promise<{ width: number; height: number; durationSeconds?: number }> {
-  if (existingVideoEl?.videoWidth && existingVideoEl?.videoHeight) {
-    const duration = Number.isFinite(existingVideoEl.duration) && existingVideoEl.duration > 0 ? existingVideoEl.duration : undefined;
-    return { width: existingVideoEl.videoWidth, height: existingVideoEl.videoHeight, durationSeconds: duration };
+  const existingWidth = existingVideoEl?.videoWidth ?? 0;
+  const existingHeight = existingVideoEl?.videoHeight ?? 0;
+  const existingDuration =
+    existingVideoEl && Number.isFinite(existingVideoEl.duration) && existingVideoEl.duration > 0
+      ? existingVideoEl.duration
+      : undefined;
+
+  if (existingWidth > 0 && existingHeight > 0 && typeof existingDuration === "number") {
+    const duration = existingDuration;
+    return { width: existingWidth, height: existingHeight, durationSeconds: duration };
   }
 
   const url = URL.createObjectURL(file);
@@ -180,11 +221,13 @@ async function readVideoMetadata(
       video.addEventListener("loadedmetadata", onLoaded, { once: true });
       video.addEventListener("error", onError, { once: true });
     });
-    if (!video.videoWidth || !video.videoHeight) {
+    const width = video.videoWidth || existingWidth;
+    const height = video.videoHeight || existingHeight;
+    if (!width || !height) {
       throw new Error("Source video metadata missing dimensions");
     }
-    const duration = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : undefined;
-    return { width: video.videoWidth, height: video.videoHeight, durationSeconds: duration };
+    const duration = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : existingDuration;
+    return { width, height, durationSeconds: duration };
   } finally {
     URL.revokeObjectURL(url);
   }
@@ -332,6 +375,7 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
   const [isExportingShort, setIsExportingShort] = useState(false);
   const [exportProgressPct, setExportProgressPct] = useState(0);
   const [localRenderError, setLocalRenderError] = useState<string | null>(null);
+  const [localRenderDiagnostics, setLocalRenderDiagnostics] = useState<string | null>(null);
   const [shortProjectNameDraft, setShortProjectNameDraft] = useState("");
 
   const isToolLocked = !!lockedTool;
@@ -474,6 +518,7 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
   useEffect(() => {
     setActiveSavedShortProjectId("");
     setLocalRenderError(null);
+    setLocalRenderDiagnostics(null);
     setExportProgressPct(0);
     setIsPlaying(false);
     setShortProjectNameDraft("");
@@ -861,13 +906,27 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
     setIsExportingShort(true);
     setExportProgressPct(0);
     setLocalRenderError(null);
+    setLocalRenderDiagnostics(null);
 
     let sourceVideoMeta: { width: number; height: number; durationSeconds?: number } | null = null;
     let exportClip = editedClip;
     let exportSubtitleChunks = selectedClipSubtitleChunks;
+    const buildDiagnosticsSnapshot = (errorMessage?: string) =>
+      buildShortExportDiagnostics({
+        sourceFilename: mediaFilename || selectedProject.filename,
+        platform: selectedPlan.platform,
+        requestedClip: editedClip,
+        exportClip,
+        sourceMeta: sourceVideoMeta,
+        selectedSubtitleChunkCount: selectedClipSubtitleChunks.length,
+        exportSubtitleChunkCount: exportSubtitleChunks.length,
+        stylePreset: resolvedSubtitleStyle.preset,
+        errorMessage,
+      });
 
     try {
       sourceVideoMeta = await readVideoMetadata(mediaFile, previewVideoRef.current);
+      console.info("[ShortExport] metadata loaded", sourceVideoMeta);
       if (typeof sourceVideoMeta.durationSeconds === "number" && Number.isFinite(sourceVideoMeta.durationSeconds)) {
         const clampedClip = clampClipToMediaDuration(editedClip, sourceVideoMeta.durationSeconds);
         const wasAdjusted =
@@ -887,10 +946,13 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
       if (!Number.isFinite(exportClip.durationSeconds) || exportClip.durationSeconds < 0.25) {
         throw new Error("Selected clip is too short to export. Increase duration to at least 0.25s.");
       }
+      console.info("[ShortExport] diagnostics pre-render\n" + buildDiagnosticsSnapshot());
     } catch (metadataError) {
       console.error(metadataError);
       setIsExportingShort(false);
       const message = metadataError instanceof Error ? metadataError.message : "Failed to read source video metadata";
+      setLocalRenderError(message);
+      setLocalRenderDiagnostics(buildDiagnosticsSnapshot(message));
       toast.error(message, {
         className: "bg-red-500/20 border-red-500/50 text-red-100",
       });
@@ -979,14 +1041,18 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
       });
     } catch (error) {
       console.error(error);
-      const message = error instanceof Error ? error.message : "Short export failed";
-      setLocalRenderError(message);
+      const rawMessage = error instanceof Error ? error.message : "Short export failed";
+      const toastMessage = rawMessage.split("\n")[0] || "Short export failed";
+      const diagnostics = buildDiagnosticsSnapshot(rawMessage);
+      setLocalRenderError(toastMessage);
+      setLocalRenderDiagnostics(diagnostics);
+      console.error("[ShortExport] failed diagnostics\n" + diagnostics);
 
       if (shortProjectRecord) {
         try {
           const failedProject = markShortProjectFailed(shortProjectRecord, {
             now: Date.now(),
-            error: message,
+            error: toastMessage,
           });
           await upsertProject(failedProject);
         } catch (persistErr) {
@@ -994,7 +1060,7 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
         }
       }
 
-      toast.error(message, {
+      toast.error(toastMessage, {
         className: "bg-red-500/20 border-red-500/50 text-red-100",
       });
     } finally {
@@ -2387,7 +2453,27 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
                                 <div className="text-xs text-white/55">Local ffmpeg.wasm export in progress… keep this tab open.</div>
                               </div>
                             )}
-                            {localRenderError && <div className="text-xs text-red-300 bg-red-500/10 border border-red-500/20 rounded-lg p-2">{localRenderError}</div>}
+                            {localRenderError && (
+                              <div className="space-y-2">
+                                <div className="text-xs text-red-300 bg-red-500/10 border border-red-500/20 rounded-lg p-2">{localRenderError}</div>
+                                {localRenderDiagnostics && (
+                                  <div className="rounded-lg border border-white/10 bg-black/40 p-2 space-y-2">
+                                    <div className="flex items-center justify-between gap-2">
+                                      <div className="text-[11px] uppercase tracking-wider text-white/45">Export diagnostics</div>
+                                      <Button
+                                        size="sm"
+                                        variant="ghost"
+                                        className="h-6 px-2 text-[11px] bg-white/5 hover:bg-white/10 text-white/75"
+                                        onClick={() => copyText(localRenderDiagnostics, "Export diagnostics")}
+                                      >
+                                        <Copy className="w-3 h-3 mr-1" /> Copy
+                                      </Button>
+                                    </div>
+                                    <pre className="text-[11px] text-white/70 whitespace-pre-wrap break-words">{localRenderDiagnostics}</pre>
+                                  </div>
+                                )}
+                              </div>
+                            )}
                           </div>
                         </div>
 

@@ -237,7 +237,13 @@ export async function exportShortVideoLocally(input: LocalShortExportInput): Pro
   };
   ff.on("progress", progressHandler);
 
+  const ffmpegLogTail: string[] = [];
   const logHandler = ({ message }: { message: string }) => {
+    const text = String(message ?? "").trim();
+    if (text) {
+      ffmpegLogTail.push(text);
+      if (ffmpegLogTail.length > 40) ffmpegLogTail.shift();
+    }
     const processedSeconds = parseFfmpegLogProgressSeconds(String(message ?? ""));
     if (processedSeconds == null || processedSeconds <= 0) return;
     emitProgress((processedSeconds / clipDuration) * 100);
@@ -416,6 +422,18 @@ export async function exportShortVideoLocally(input: LocalShortExportInput): Pro
       notes,
       subtitleBurnedIn: usedSubtitleBurnIn,
     };
+  } catch (error) {
+    const rawMessage = error instanceof Error ? error.message : String(error);
+    const diagnostics = [
+      `clip=${input.clip.startSeconds.toFixed(3)}-${input.clip.endSeconds.toFixed(3)} (${clipDuration.toFixed(3)}s)`,
+      `seekMode=${usedSeekMode}`,
+      `subtitleBurnIn=${usedSubtitleBurnIn}`,
+      `subtitleChunks=${input.subtitleChunks?.length ?? 0}`,
+      `source=${input.sourceFilename}`,
+    ].join(", ");
+    const logTail = ffmpegLogTail.slice(-8).join("\n");
+    const detail = logTail ? `${diagnostics}\nffmpeg-log-tail:\n${logTail}` : diagnostics;
+    throw new Error(`${rawMessage}\n${detail}`);
   } finally {
     try {
       await ff.deleteFile(outputPath);
