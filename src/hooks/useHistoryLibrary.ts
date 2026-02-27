@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
-import { db } from "@/lib/db";
-import { normalizeHistoryItem, sortHistoryItems, type HistoryItem } from "@/lib/history";
+import type { HistoryItem } from "@/lib/history";
+import { createDexieHistoryRepository } from "@/lib/repositories/history-repo";
+
+const historyRepository = createDexieHistoryRepository();
 
 export function useHistoryLibrary() {
   const [history, setHistory] = useState<HistoryItem[]>([]);
@@ -11,8 +13,7 @@ export function useHistoryLibrary() {
     setIsLoading(true);
     setError(null);
     try {
-      const stored = await db.history.orderBy("timestamp").reverse().toArray();
-      setHistory(sortHistoryItems((stored || []).map(normalizeHistoryItem)));
+      setHistory(await historyRepository.listHistory());
     } catch (err) {
       console.error("Failed to load history", err);
       setError(err instanceof Error ? err.message : "Failed to load history");

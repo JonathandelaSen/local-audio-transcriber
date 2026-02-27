@@ -1,4 +1,4 @@
-# Neural Whisper (Local Audio Transcriber)
+# Neural Whisper (Local Audio & Video Transcriber + Creator Hub)
 
 <div align="center">
   <img src="./docs/main.png" alt="Main Screen" width="80%" />
@@ -9,9 +9,9 @@
   <img src="./docs/history.png" alt="History Screen" width="30%" />
 </div>
 
-A modern, privacy-first web application built with [Next.js](http://nextjs.org) that allows users to seamlessly drag and drop audio files and receive highly accurate transcriptions in Spanish.
+A modern, privacy-first web application built with [Next.js](http://nextjs.org) that allows users to seamlessly drag and drop audio and video files to receive highly accurate transcriptions. It also features built-in creator tools to plan, edit, and render short-form videos completely locally.
 
-The application leverages a local Web Worker and client-side processing via Transformers.js to ensure efficient, private, and fast transcription directly on your device using WebGPU or WASM.
+The application leverages a local Web Worker and client-side processing via Transformers.js for transcriptions, and FFmpeg WASM for video manipulation, ensuring efficient, private, and fast execution directly on your device.
 
 <img src="./docs/app_recording.gif" alt="App Recording" width="100%" />
 
@@ -25,6 +25,10 @@ The application leverages a local Web Worker and client-side processing via Tran
 - 🌐 **Subtitle Translation**: Translate your `.srt` subtitles into 10 different target languages entirely client-side using lightweight Web Workers and dynamically downloaded models.
 - 💾 **Export & Downloads**: Download your generated transcripts as plain text (`.txt`) or as SubRip Subtitles (`.srt`) out of the box. Both features are available inline and in the History tab.
 - 📋 **One-Click Copying**: Easily copy full transcripts or subtitles with integrated clipboard buttons.
+- 🎬 **Video Support & FFmpeg Rendering**: Drop in video files directly. The app processes them locally and can export edited short-form video clips right from your browser via FFmpeg WASM.
+- ✂️ **Built-in Clip Editor**: A comprehensive local video editor tailored for short-form content. Features include trimming, pan/zoom framing, customizable subtitle positioning, and safe-zone overlays for platforms like TikTok, YouTube Shorts, and Instagram Reels.
+- 🤖 **Creator AI Tools**: Automatically generate title ideas, SEO descriptions, chapters, and identify "viral clips" from transcripts to effortlessly repurpose long-form content.
+- 🎨 **Visual Subtitles**: Render dynamic subtitles with configurable styles and precise time shifting directly onto video exports.
 
 ## NLP Models
 
@@ -47,7 +51,8 @@ NEXT_PUBLIC_ENABLE_LOGS=true
 - **Styling**: Tailwind CSS & shadcn/ui
 - **Icons**: Lucide React
 - **ML Engine**: Hugging Face Transformers.js (Whisper model)
-- **State/Persistence**: React Hooks & LocalStorage
+- **Local Media Processing**: FFmpeg WASM (`@ffmpeg/ffmpeg`)
+- **State/Persistence**: React Hooks, LocalStorage, & Dexie.js (IndexedDB)
 
 ## Getting Started
 

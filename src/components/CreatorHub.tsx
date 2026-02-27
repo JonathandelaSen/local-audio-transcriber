@@ -5,7 +5,6 @@ import Link from "next/link";
 import {
   ArrowLeft,
   CalendarClock,
-  CheckCircle2,
   Clapperboard,
   Copy,
   Download,
@@ -20,7 +19,6 @@ import {
   Pause,
   Play,
   Rocket,
-  Scissors,
   Save,
   Sparkles,
   TriangleAlert,
@@ -44,17 +42,35 @@ import {
   type SubtitleVersion,
 } from "@/lib/history";
 import {
-  clamp,
   secondsToClock,
   type CreatorAnalyzeRequest,
   type CreatorShortEditorState,
   type CreatorShortPlan,
-  type CreatorShortRenderResponse,
+  type CreatorSubtitleStyleSettings,
   type CreatorViralClip,
   type CreatorVideoInfoBlock,
 } from "@/lib/creator/types";
+import {
+  applyTrimNudgesToClip,
+  createManualFallbackClip,
+  createManualFallbackPlan,
+  deriveTrimNudgesFromSavedClip,
+} from "@/lib/creator/core/clip-editing";
+import {
+  buildCompletedShortExportRecord,
+  buildLocalBrowserRenderResponse,
+  buildShortProjectRecord,
+  markShortProjectExported,
+  markShortProjectFailed,
+} from "@/lib/creator/core/short-lifecycle";
 import type { CreatorShortExportRecord, CreatorShortProjectRecord } from "@/lib/creator/storage";
 import { exportShortVideoLocally } from "@/lib/creator/local-render";
+import {
+  CREATOR_SUBTITLE_STYLE_LABELS,
+  cssRgbaFromHex,
+  getDefaultCreatorSubtitleStyle,
+  resolveCreatorSubtitleStyle,
+} from "@/lib/creator/subtitle-style";
 import { useCreatorHub } from "@/hooks/useCreatorHub";
 import { useHistoryLibrary } from "@/hooks/useHistoryLibrary";
 import { useCreatorShortsLibrary } from "@/hooks/useCreatorShortsLibrary";
@@ -111,63 +127,6 @@ function platformLabel(platform: CreatorShortPlan["platform"]): string {
   if (platform === "youtube_shorts") return "YouTube Shorts";
   if (platform === "instagram_reels") return "Instagram Reels";
   return "TikTok";
-}
-
-function createManualFallbackClip(options: {
-  sourceDurationSeconds?: number;
-  subtitleLanguage?: string;
-}): CreatorViralClip {
-  const maxDuration = typeof options.sourceDurationSeconds === "number" && Number.isFinite(options.sourceDurationSeconds)
-    ? Math.max(1, Number(options.sourceDurationSeconds.toFixed(2)))
-    : undefined;
-  const endSeconds = maxDuration ? Math.min(maxDuration, 60) : 60;
-
-  return {
-    id: "manual_clip_fallback",
-    startSeconds: 0,
-    endSeconds,
-    durationSeconds: Number((endSeconds - 0).toFixed(2)),
-    score: 0,
-    title: "Manual Clip (No Clip Lab)",
-    hook: "Edit this source manually without generating clip suggestions first.",
-    reason: "Fallback clip created so the editor can be used immediately.",
-    punchline: "Manual short edit",
-    sourceChunkIndexes: [],
-    suggestedSubtitleLanguage: options.subtitleLanguage || "en",
-    platforms: ["youtube_shorts", "instagram_reels", "tiktok"],
-  };
-}
-
-function createManualFallbackPlan(clipId: string): CreatorShortPlan {
-  return {
-    id: "manual_plan_fallback",
-    clipId,
-    platform: "youtube_shorts",
-    title: "Manual Edit Preset",
-    caption: "",
-    subtitleStyle: "clean_caption",
-    openingText: "Manual short cut",
-    endCardText: "Follow for more",
-    editorPreset: {
-      platform: "youtube_shorts",
-      aspectRatio: "9:16",
-      resolution: "1080x1920",
-      subtitleStyle: "clean_caption",
-      safeTopPct: 12,
-      safeBottomPct: 14,
-      targetDurationRange: [15, 60],
-    },
-  };
-}
-
-function subtitleStyleClass(style: CreatorShortPlan["subtitleStyle"]): string {
-  if (style === "bold_pop") {
-    return "font-black tracking-tight uppercase text-white [text-shadow:0_2px_0_rgba(0,0,0,0.8),0_0_20px_rgba(251,191,36,0.35)]";
-  }
-  if (style === "creator_neon") {
-    return "font-bold text-cyan-100 [text-shadow:0_0_8px_rgba(34,211,238,0.55),0_0_18px_rgba(34,211,238,0.35)]";
-  }
-  return "font-semibold text-white [text-shadow:0_1px_0_rgba(0,0,0,0.8)]";
 }
 
 function buildYouTubeTimestamps(chapters: { timeSeconds: number; label: string }[]): string {
@@ -295,7 +254,6 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
     isAnalyzing,
     analyzeError,
     analyze,
-    lastRender,
     setLastRender,
   } = useCreatorHub();
 
@@ -327,6 +285,7 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
   const [subtitleScale, setSubtitleScale] = useState(1);
   const [subtitleXPositionPct, setSubtitleXPositionPct] = useState(50);
   const [subtitleYOffsetPct, setSubtitleYOffsetPct] = useState(78);
+  const [subtitleStyleOverrides, setSubtitleStyleOverrides] = useState<Partial<CreatorSubtitleStyleSettings>>({});
   const [showSafeZones, setShowSafeZones] = useState(true);
   const [activeSavedShortProjectId, setActiveSavedShortProjectId] = useState<string>("");
   const [isExportingShort, setIsExportingShort] = useState(false);
@@ -477,6 +436,7 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
     setExportProgressPct(0);
     setIsPlaying(false);
     setShortProjectNameDraft("");
+    setSubtitleStyleOverrides({});
   }, [selectedProject?.id]);
 
   // Video event callbacks — attached as JSX props on the <video>, no effect needed
@@ -533,29 +493,21 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
 
   const editedClip = useMemo(() => {
     if (!selectedClip) return undefined;
-    const maxClipEnd = typeof sourceDurationSeconds === "number" && Number.isFinite(sourceDurationSeconds)
-      ? Math.max(1, Number(sourceDurationSeconds.toFixed(2)))
-      : Number.POSITIVE_INFINITY;
-    const maxClipStart = Number.isFinite(maxClipEnd) ? Math.max(0, maxClipEnd - 1) : Number.POSITIVE_INFINITY;
-
-    const start = Number(clamp(Number((selectedClip.startSeconds + trimStartNudge).toFixed(2)), 0, maxClipStart).toFixed(2));
-    const unclampedEnd = Number((selectedClip.endSeconds + trimEndNudge).toFixed(2));
-    const minEnd = Number((start + 1).toFixed(2));
-    const end = Number(clamp(Math.max(minEnd, unclampedEnd), minEnd, maxClipEnd).toFixed(2));
-    return {
-      ...selectedClip,
-      startSeconds: start,
-      endSeconds: end,
-      durationSeconds: Number((end - start).toFixed(2)),
-    };
+    return applyTrimNudgesToClip(selectedClip, {
+      sourceDurationSeconds,
+      trimStartNudge,
+      trimEndNudge,
+    });
   }, [selectedClip, sourceDurationSeconds, trimEndNudge, trimStartNudge]);
 
   useEffect(() => {
     if (!activeSavedShortProject || !selectedClip) return;
     if (selectedClip.id !== activeSavedShortProject.clipId) return;
 
-    const nextStartNudge = Number((activeSavedShortProject.clip.startSeconds - selectedClip.startSeconds).toFixed(2));
-    const nextEndNudge = Number((activeSavedShortProject.clip.endSeconds - selectedClip.endSeconds).toFixed(2));
+    const { trimStartNudge: nextStartNudge, trimEndNudge: nextEndNudge } = deriveTrimNudgesFromSavedClip(
+      selectedClip,
+      activeSavedShortProject.clip
+    );
 
     setTrimStartNudge((prev) => (Math.abs(prev - nextStartNudge) < 0.01 ? prev : nextStartNudge));
     setTrimEndNudge((prev) => (Math.abs(prev - nextEndNudge) < 0.01 ? prev : nextEndNudge));
@@ -604,6 +556,11 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
     return clipSubtitleChunks(editedClip, selectedSubtitle.chunks);
   }, [editedClip, selectedSubtitle]);
 
+  const resolvedSubtitleStyle = useMemo(() => {
+    const fallback = selectedPlan?.subtitleStyle ?? "clean_caption";
+    return resolveCreatorSubtitleStyle(fallback, subtitleStyleOverrides);
+  }, [selectedPlan?.subtitleStyle, subtitleStyleOverrides]);
+
   const currentEditorState = useMemo<CreatorShortEditorState>(
     () => ({
       zoom,
@@ -612,9 +569,10 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
       subtitleScale,
       subtitleXPositionPct,
       subtitleYOffsetPct,
+      subtitleStyle: subtitleStyleOverrides,
       showSafeZones,
     }),
-    [panX, panY, showSafeZones, subtitleScale, subtitleXPositionPct, subtitleYOffsetPct, zoom]
+    [panX, panY, showSafeZones, subtitleScale, subtitleStyleOverrides, subtitleXPositionPct, subtitleYOffsetPct, zoom]
   );
 
   useEffect(() => {
@@ -745,43 +703,25 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
       options?: { id?: string; lastExportId?: string; lastError?: string }
     ): CreatorShortProjectRecord | null => {
       if (!selectedProject || !selectedTranscript || !selectedSubtitle || !editedClip || !selectedPlan) return null;
-
-      const existing =
-        (options?.id && savedShortProjects.find((record) => record.id === options.id)) ||
-        savedShortProjects.find(
-          (record) =>
-            record.sourceProjectId === selectedProject.id &&
-            record.transcriptId === selectedTranscript.id &&
-            record.subtitleId === selectedSubtitle.id &&
-            record.clipId === editedClip.id &&
-            record.planId === selectedPlan.id
-        );
-
-      const now = Date.now();
-      const explicitShortName = shortProjectNameDraft.trim();
-      return {
-        id: existing?.id ?? makeId("shortproj"),
+      return buildShortProjectRecord({
+        status,
+        now: Date.now(),
+        newId: makeId("shortproj"),
         sourceProjectId: selectedProject.id,
         sourceMediaId: selectedProject.mediaId || selectedProject.id,
         sourceFilename: mediaFilename || selectedProject.filename,
         transcriptId: selectedTranscript.id,
         subtitleId: selectedSubtitle.id,
-        clipId: editedClip.id,
-        planId: selectedPlan.id,
-        platform: selectedPlan.platform,
-        name:
-          explicitShortName ||
-          existing?.name ||
-          `${platformLabel(selectedPlan.platform)} • ${secondsToClock(editedClip.startSeconds)}-${secondsToClock(editedClip.endSeconds)}`,
         clip: editedClip,
         plan: selectedPlan,
         editor: currentEditorState,
-        createdAt: existing?.createdAt ?? now,
-        updatedAt: now,
-        status,
-        lastExportId: options?.lastExportId ?? existing?.lastExportId,
+        savedRecords: savedShortProjects,
+        explicitId: options?.id,
+        explicitName: shortProjectNameDraft,
+        lastExportId: options?.lastExportId,
         lastError: options?.lastError,
-      };
+        secondsToClock,
+      });
     },
     [
       currentEditorState,
@@ -840,6 +780,7 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
     setSubtitleScale(project.editor.subtitleScale);
     setSubtitleXPositionPct(project.editor.subtitleXPositionPct ?? 50);
     setSubtitleYOffsetPct(project.editor.subtitleYOffsetPct);
+    setSubtitleStyleOverrides(resolveCreatorSubtitleStyle(project.plan.subtitleStyle, project.editor.subtitleStyle));
     setShowSafeZones(project.editor.showSafeZones ?? true);
   }, []);
 
@@ -894,9 +835,14 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
 
       const sourceVideoSize = await readVideoDimensions(mediaFile, previewVideoRef.current);
       const frameRect = previewFrameRef.current?.getBoundingClientRect();
-      const videoRect = previewVideoRef.current?.getBoundingClientRect();
       const previewViewport = frameRect ? { width: frameRect.width, height: frameRect.height } : null;
-      const previewVideoRect = videoRect ? { width: videoRect.width, height: videoRect.height } : null;
+
+      // NOTE: We intentionally pass null for previewVideoRect.
+      // getBoundingClientRect() on a <video> with objectFit:"contain" returns
+      // the full element box (including letterbox/pillarbox areas), not the
+      // actual rendered video content rect. Using that rect causes
+      // export-geometry to compute an incorrectly stretched scale.
+      // The fallback path (source dimensions + editor zoom) is correct.
 
       const localExport = await exportShortVideoLocally({
         sourceFile: mediaFile,
@@ -907,59 +853,44 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
         editor: currentEditorState,
         sourceVideoSize,
         previewViewport,
-        previewVideoRect,
+        previewVideoRect: null,
         onProgress: setExportProgressPct,
       });
 
-      const exportRecord: CreatorShortExportRecord = {
+      const exportRecord = buildCompletedShortExportRecord({
         id: makeId("shortexport"),
         shortProjectId: shortProjectRecord.id,
         sourceProjectId: selectedProject.id,
         sourceFilename: mediaFilename || selectedProject.filename,
-        platform: selectedPlan.platform,
+        plan: selectedPlan,
+        clip: editedClip,
+        editor: currentEditorState,
         createdAt: Date.now(),
-        status: "completed",
         filename: localExport.file.name,
         mimeType: localExport.file.type || "video/mp4",
         sizeBytes: localExport.file.size,
         fileBlob: localExport.file,
         debugFfmpegCommand: localExport.ffmpegCommandPreview,
         debugNotes: localExport.notes,
-        clip: editedClip,
-        plan: selectedPlan,
-        editor: currentEditorState,
-      };
+      });
 
       await upsertExport(exportRecord);
 
-      shortProjectRecord = {
-        ...shortProjectRecord,
-        status: "exported",
-        updatedAt: Date.now(),
-        lastExportId: exportRecord.id,
-        lastError: undefined,
-      };
+      shortProjectRecord = markShortProjectExported(shortProjectRecord, {
+        now: Date.now(),
+        exportId: exportRecord.id,
+      });
       await upsertProject(shortProjectRecord);
 
-      const renderResult: CreatorShortRenderResponse = {
-        ok: true,
-        providerMode: "local-browser",
+      const renderResult = buildLocalBrowserRenderResponse({
         jobId: exportRecord.id,
-        status: "completed",
         createdAt: exportRecord.createdAt,
-        estimatedSeconds: 0,
-        output: {
-          platform: selectedPlan.platform,
-          filename: exportRecord.filename,
-          aspectRatio: "9:16",
-          resolution: "1080x1920",
-          subtitleBurnedIn: localExport.subtitleBurnedIn,
-        },
-        debugPreview: {
-          ffmpegCommandPreview: localExport.ffmpegCommandPreview,
-          notes: localExport.notes,
-        },
-      };
+        plan: selectedPlan,
+        filename: exportRecord.filename,
+        subtitleBurnedIn: localExport.subtitleBurnedIn,
+        ffmpegCommandPreview: localExport.ffmpegCommandPreview,
+        notes: localExport.notes,
+      });
       setLastRender(renderResult);
 
       handleDownloadSavedExport(exportRecord);
@@ -973,12 +904,10 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
 
       if (shortProjectRecord) {
         try {
-          const failedProject: CreatorShortProjectRecord = {
-            ...shortProjectRecord,
-            status: "error",
-            updatedAt: Date.now(),
-            lastError: message,
-          };
+          const failedProject = markShortProjectFailed(shortProjectRecord, {
+            now: Date.now(),
+            error: message,
+          });
           await upsertProject(failedProject);
         } catch (persistErr) {
           console.error("Failed to persist short export error state", persistErr);
@@ -1009,6 +938,11 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
     if (!clipTextPreview) return "Add subtitles + punchy hook text";
     return clipTextPreview.split(/(?<=[.!?])\s+/)[0]?.slice(0, 80) || clipTextPreview.slice(0, 80);
   }, [clipTextPreview, currentTime, editedClip, isPlaying, selectedClipSubtitleChunks]);
+
+  const previewSubtitleDisplayLine = useMemo(() => {
+    if (!previewSubtitleLine) return "";
+    return resolvedSubtitleStyle.textCase === "uppercase" ? previewSubtitleLine.toUpperCase() : previewSubtitleLine;
+  }, [previewSubtitleLine, resolvedSubtitleStyle.textCase]);
 
   const clipProgressPct = useMemo(() => {
     if (!editedClip) return 0;
@@ -1868,27 +1802,33 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
                             </>
                           )}
 
-                          {previewSubtitleLine && (
+                          {previewSubtitleDisplayLine && (
                             <div
-                              className="absolute px-2 py-1.5 text-center transition-opacity duration-150"
+                              className="absolute text-center transition-opacity duration-150"
                               style={{
                                 left: `${subtitleXPositionPct}%`,
                                 top: `${subtitleYOffsetPct}%`,
                                 transform: `translate(-50%, -50%) scale(${subtitleScale})`,
                                 maxWidth: "80%",
-                                backgroundColor: "rgba(0,0,0,0.43)",
+                                paddingInline: `${resolvedSubtitleStyle.backgroundPadding}px`,
+                                paddingBlock: `${Math.max(4, Math.round(resolvedSubtitleStyle.backgroundPadding * 0.55))}px`,
+                                backgroundColor: cssRgbaFromHex(resolvedSubtitleStyle.backgroundColor, resolvedSubtitleStyle.backgroundOpacity),
                                 fontFamily: "var(--font-inter), 'Inter', sans-serif",
                               }}
                             >
                               <div
-                                className="text-sm leading-tight font-semibold"
+                                className="text-sm leading-tight"
                                 style={{
-                                  color: "#FFFFFF",
-                                  WebkitTextStroke: "0.5px rgba(10,10,10,0.8)",
+                                  color: resolvedSubtitleStyle.textColor,
+                                  fontWeight: resolvedSubtitleStyle.preset === "clean_caption" ? 600 : 700,
+                                  WebkitTextStroke: `${(resolvedSubtitleStyle.outlineWidth * 0.32).toFixed(2)}px ${cssRgbaFromHex(
+                                    resolvedSubtitleStyle.outlineColor,
+                                    0.95
+                                  )}`,
                                   paintOrder: "stroke fill",
                                 }}
                               >
-                                {previewSubtitleLine}
+                                {previewSubtitleDisplayLine}
                               </div>
                             </div>
                           )}
@@ -1950,6 +1890,7 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
                             <div>Clip: {secondsToClock(editedClip.startSeconds)} → {secondsToClock(editedClip.endSeconds)}</div>
                             <div>Duration: {editedClip.durationSeconds.toFixed(1)}s</div>
                             <div>Subtitle source: {selectedSubtitle ? subtitleVersionLabel(selectedSubtitle) : "None"}</div>
+                            <div>Subtitle style: {CREATOR_SUBTITLE_STYLE_LABELS[resolvedSubtitleStyle.preset]}</div>
                             <div>Subtitle chunks in clip: {selectedClipSubtitleChunks.length}</div>
                             {activeSavedShortProject && (
                               <div className="text-emerald-200/90">Loaded saved short: {activeSavedShortProject.name}</div>
@@ -2087,6 +2028,140 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
                             <input type="range" min={10} max={90} step={1} value={subtitleXPositionPct} onChange={(e) => setSubtitleXPositionPct(Number(e.target.value))} className="w-full" />
                             <label className="text-xs text-white/70 block">Subtitle vertical position: {subtitleYOffsetPct.toFixed(0)}%</label>
                             <input type="range" min={45} max={92} step={1} value={subtitleYOffsetPct} onChange={(e) => setSubtitleYOffsetPct(Number(e.target.value))} className="w-full" />
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                              <label className="text-xs text-white/70 block">
+                                Text color
+                                <input
+                                  type="color"
+                                  value={resolvedSubtitleStyle.textColor}
+                                  onChange={(e) => {
+                                    setSubtitleStyleOverrides((prev) => ({ ...prev, textColor: e.target.value.toUpperCase() }));
+                                    setActiveSavedShortProjectId("");
+                                  }}
+                                  className="mt-1 h-9 w-full rounded-md border border-white/10 bg-white/5"
+                                />
+                              </label>
+                              <label className="text-xs text-white/70 block">
+                                Background color
+                                <input
+                                  type="color"
+                                  value={resolvedSubtitleStyle.backgroundColor}
+                                  onChange={(e) => {
+                                    setSubtitleStyleOverrides((prev) => ({ ...prev, backgroundColor: e.target.value.toUpperCase() }));
+                                    setActiveSavedShortProjectId("");
+                                  }}
+                                  className="mt-1 h-9 w-full rounded-md border border-white/10 bg-white/5"
+                                />
+                              </label>
+                              <label className="text-xs text-white/70 block">
+                                Outline color
+                                <input
+                                  type="color"
+                                  value={resolvedSubtitleStyle.outlineColor}
+                                  onChange={(e) => {
+                                    setSubtitleStyleOverrides((prev) => ({ ...prev, outlineColor: e.target.value.toUpperCase() }));
+                                    setActiveSavedShortProjectId("");
+                                  }}
+                                  className="mt-1 h-9 w-full rounded-md border border-white/10 bg-white/5"
+                                />
+                              </label>
+                              <label className="text-xs text-white/70 block">
+                                Style preset
+                                <Select
+                                  value={resolvedSubtitleStyle.preset}
+                                  onValueChange={(value) => {
+                                    if (value !== "bold_pop" && value !== "clean_caption" && value !== "creator_neon") return;
+                                    setSubtitleStyleOverrides(getDefaultCreatorSubtitleStyle(value));
+                                    setActiveSavedShortProjectId("");
+                                  }}
+                                >
+                                  <SelectTrigger className="mt-1 h-9 w-full bg-white/5 border-white/10 text-white/90">
+                                    <SelectValue />
+                                  </SelectTrigger>
+                                  <SelectContent className="bg-zinc-950 border-white/10 text-white/90">
+                                    {(["bold_pop", "clean_caption", "creator_neon"] as const).map((preset) => (
+                                      <SelectItem key={preset} value={preset} className="focus:bg-cyan-500/20 cursor-pointer">
+                                        {CREATOR_SUBTITLE_STYLE_LABELS[preset]}
+                                      </SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                              </label>
+                            </div>
+                            <label className="text-xs text-white/70 block">
+                              Background opacity: {Math.round(resolvedSubtitleStyle.backgroundOpacity * 100)}%
+                            </label>
+                            <input
+                              type="range"
+                              min={0}
+                              max={1}
+                              step={0.01}
+                              value={resolvedSubtitleStyle.backgroundOpacity}
+                              onChange={(e) => {
+                                setSubtitleStyleOverrides((prev) => ({ ...prev, backgroundOpacity: Number(e.target.value) }));
+                                setActiveSavedShortProjectId("");
+                              }}
+                              className="w-full"
+                            />
+                            <label className="text-xs text-white/70 block">Outline width: {resolvedSubtitleStyle.outlineWidth.toFixed(1)}px</label>
+                            <input
+                              type="range"
+                              min={0}
+                              max={8}
+                              step={0.1}
+                              value={resolvedSubtitleStyle.outlineWidth}
+                              onChange={(e) => {
+                                setSubtitleStyleOverrides((prev) => ({ ...prev, outlineWidth: Number(e.target.value) }));
+                                setActiveSavedShortProjectId("");
+                              }}
+                              className="w-full"
+                            />
+                            <label className="text-xs text-white/70 block">Background padding: {resolvedSubtitleStyle.backgroundPadding.toFixed(0)}px</label>
+                            <input
+                              type="range"
+                              min={0}
+                              max={20}
+                              step={1}
+                              value={resolvedSubtitleStyle.backgroundPadding}
+                              onChange={(e) => {
+                                setSubtitleStyleOverrides((prev) => ({ ...prev, backgroundPadding: Number(e.target.value) }));
+                                setActiveSavedShortProjectId("");
+                              }}
+                              className="w-full"
+                            />
+                            <label className="text-xs text-white/70 block">
+                              Text case
+                              <Select
+                                value={resolvedSubtitleStyle.textCase}
+                                onValueChange={(value) => {
+                                  if (value !== "original" && value !== "uppercase") return;
+                                  setSubtitleStyleOverrides((prev) => ({ ...prev, textCase: value }));
+                                  setActiveSavedShortProjectId("");
+                                }}
+                              >
+                                <SelectTrigger className="mt-1 h-9 w-full bg-white/5 border-white/10 text-white/90">
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent className="bg-zinc-950 border-white/10 text-white/90">
+                                  <SelectItem value="original" className="focus:bg-cyan-500/20 cursor-pointer">Original</SelectItem>
+                                  <SelectItem value="uppercase" className="focus:bg-cyan-500/20 cursor-pointer">Uppercase</SelectItem>
+                                </SelectContent>
+                              </Select>
+                            </label>
+                            <div className="flex justify-end">
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="ghost"
+                                className="h-7 px-2 text-xs bg-white/5 hover:bg-white/10 text-white/80"
+                                onClick={() => {
+                                  setSubtitleStyleOverrides({});
+                                  setActiveSavedShortProjectId("");
+                                }}
+                              >
+                                Use Plan Default Style
+                              </Button>
+                            </div>
                             <label className="flex items-center gap-2 text-xs text-white/70 mt-2">
                               <input type="checkbox" checked={showSafeZones} onChange={(e) => setShowSafeZones(e.target.checked)} />
                               Show platform safe zones
@@ -2168,6 +2243,7 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
                                   setSubtitleScale(1);
                                   setSubtitleXPositionPct(50);
                                   setSubtitleYOffsetPct(78);
+                                  setSubtitleStyleOverrides({});
                                   setShowSafeZones(true);
                                   setActiveSavedShortProjectId("");
                                 }}

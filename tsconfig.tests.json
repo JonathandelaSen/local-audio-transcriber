@@ -1,0 +1,24 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "outDir": ".tmp/test-dist",
+    "rootDir": ".",
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "types": ["node"],
+    "incremental": false,
+    "plugins": []
+  },
+  "include": [
+    "src/lib/creator/core/**/*.ts",
+    "src/lib/transcriber/core/**/*.ts",
+    "tests/core/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    ".next"
+  ]
+}

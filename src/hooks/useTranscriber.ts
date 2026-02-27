@@ -1,18 +1,22 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { db } from "@/lib/db";
 import {
   makeId,
-  normalizeHistoryItem,
   shiftSubtitleChunks,
   sortHistoryItems,
   sortSubtitleVersions,
-  sortTranscriptVersions,
   syncOriginalSubtitleVersion,
   type HistoryItem,
   type SubtitleChunk,
   type SubtitleVersion,
   type TranscriptVersion,
 } from "@/lib/history";
+import { createDexieHistoryRepository } from "@/lib/repositories/history-repo";
+import {
+  markInterruptedTranscriptsAsErrored,
+  updateTranscriptInHistoryItems,
+  upsertTranscribingTranscriptProject,
+} from "@/lib/transcriber/core/history-updates";
+import { upsertProgressItem } from "@/lib/transcriber/core/progress";
 
 export type { HistoryItem } from "@/lib/history";
 
@@ -33,6 +37,7 @@ type TranscribeOptions = {
 };
 
 export function useTranscriber() {
+  const historyRepository = useRef(createDexieHistoryRepository());
   const [transcript, setTranscript] = useState<string>("");
   const [chunks, setChunks] = useState<SubtitleChunk[]>([]);
   const [isBusy, setIsBusy] = useState(false);
@@ -52,26 +57,11 @@ export function useTranscriber() {
   const updateTranscriptInHistory = useCallback(
     (projectId: string, transcriptVersionId: string, updater: (transcript: TranscriptVersion) => TranscriptVersion) => {
       mutateHistory((prev) =>
-        prev.map((project) => {
-          if (project.id !== projectId) return project;
-
-          let changed = false;
-          const transcripts = project.transcripts.map((tx) => {
-            if (tx.id !== transcriptVersionId) return tx;
-            changed = true;
-            return updater(tx);
-          });
-
-          if (!changed) return project;
-
-          const now = Date.now();
-          return {
-            ...project,
-            transcripts: sortTranscriptVersions(transcripts),
-            activeTranscriptVersionId: transcriptVersionId,
-            updatedAt: now,
-            timestamp: now,
-          };
+        updateTranscriptInHistoryItems(prev, {
+          projectId,
+          transcriptVersionId,
+          now: Date.now(),
+          updater,
         })
       );
     },
@@ -87,32 +77,11 @@ export function useTranscriber() {
   useEffect(() => {
     if (initializedStorage.current) return;
 
-    db.history
-      .orderBy("timestamp")
-      .reverse()
-      .toArray()
+    historyRepository.current
+      .listHistory()
       .then((stored) => {
-        const normalized = sortHistoryItems((stored || []).map(normalizeHistoryItem)).map((project) => {
-          let hasInterrupted = false;
-          const transcripts = project.transcripts.map((tx) => {
-            if (tx.status !== "transcribing") return tx;
-            hasInterrupted = true;
-            return {
-              ...tx,
-              status: "error" as const,
-              error: tx.error || "Interrupted by page reload",
-              updatedAt: Date.now(),
-            };
-          });
-
-          if (!hasInterrupted) return project;
-          const now = Date.now();
-          return {
-            ...project,
-            transcripts,
-            updatedAt: now,
-            timestamp: now,
-          };
+        const normalized = markInterruptedTranscriptsAsErrored(sortHistoryItems(stored || []), {
+          now: Date.now(),
         });
 
         initializedStorage.current = true;
@@ -126,7 +95,7 @@ export function useTranscriber() {
 
   useEffect(() => {
     if (!initializedStorage.current || history.length === 0) return;
-    db.history.bulkPut(history).catch((e) => {
+    historyRepository.current.bulkPutHistory(history).catch((e) => {
       console.error("Failed to save history to DB", e);
     });
   }, [history]);
@@ -152,16 +121,7 @@ export function useTranscriber() {
           if (data?.name) {
             appendLog(`PROGRESS: ${data.name} ${Math.round(data.progress || 0)}%`);
           }
-          setProgressItems((prev) => {
-            const items = [...prev];
-            const idx = items.findIndex((item) => item.file === data.file);
-            if (idx !== -1) {
-              items[idx] = data;
-            } else {
-              items.push(data);
-            }
-            return items;
-          });
+          setProgressItems((prev) => upsertProgressItem(prev, data));
           break;
         case "ready":
           appendLog("READY: Model loaded");
@@ -287,63 +247,17 @@ export function useTranscriber() {
       const transcriptVersionId = makeId("tx");
       currentTaskRef.current = { projectId, transcriptVersionId };
 
-      db.mediaFiles.put({ id: projectId, file }).catch((e) => console.error("Failed to save media file", e));
+      historyRepository.current.putMediaFile({ id: projectId, file }).catch((e) => console.error("Failed to save media file", e));
 
-      mutateHistory((prev) => {
-        let found = false;
-        const next = prev.map((project) => {
-          if (project.id !== projectId) return project;
-          found = true;
-
-          const nextVersionNumber =
-            project.transcripts.reduce((max, tx) => Math.max(max, tx.versionNumber || 0), 0) + 1;
-          const newTranscript: TranscriptVersion = {
-            id: transcriptVersionId,
-            versionNumber: nextVersionNumber,
-            label: `Transcript v${nextVersionNumber}`,
-            status: "transcribing",
-            createdAt: now,
-            updatedAt: now,
-            requestedLanguage: language,
-            subtitles: [],
-          };
-
-          return {
-            ...project,
-            filename: project.filename || file.name,
-            updatedAt: now,
-            timestamp: now,
-            activeTranscriptVersionId: transcriptVersionId,
-            transcripts: sortTranscriptVersions([...project.transcripts, newTranscript]),
-          };
-        });
-
-        if (found) return next;
-
-        const firstTranscript: TranscriptVersion = {
-          id: transcriptVersionId,
-          versionNumber: 1,
-          label: "Transcript v1",
-          status: "transcribing",
-          createdAt: now,
-          updatedAt: now,
+      mutateHistory((prev) =>
+        upsertTranscribingTranscriptProject(prev, {
+          now,
+          projectId,
+          transcriptVersionId,
+          fileName: file.name,
           requestedLanguage: language,
-          subtitles: [],
-        };
-
-        const newProject: HistoryItem = {
-          id: projectId,
-          mediaId: projectId,
-          filename: file.name,
-          createdAt: now,
-          updatedAt: now,
-          timestamp: now,
-          activeTranscriptVersionId: transcriptVersionId,
-          transcripts: [firstTranscript],
-        };
-
-        return [newProject, ...next];
-      });
+        })
+      );
 
       const duration = audioData.length / 16000;
       worker.current?.postMessage({
@@ -380,8 +294,8 @@ export function useTranscriber() {
 
   const deleteHistoryItem = useCallback((id: string) => {
     setHistory((prev) => prev.filter((item) => item.id !== id));
-    db.history.delete(id).catch(console.error);
-    db.mediaFiles.delete(id).catch(console.error);
+    historyRepository.current.deleteHistoryItem(id).catch(console.error);
+    historyRepository.current.deleteMediaFile(id).catch(console.error);
   }, []);
 
   const renameHistoryItem = useCallback((id: string, newFilename: string) => {

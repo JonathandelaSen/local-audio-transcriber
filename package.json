@@ -6,7 +6,9 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test": "npm run test:core",
+    "test:core": "tsc -p tsconfig.tests.json && node --test $(find .tmp/test-dist/tests/core -name '*.test.js' -print)"
   },
   "dependencies": {
     "@ffmpeg/core": "^0.12.10",

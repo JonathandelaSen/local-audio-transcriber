@@ -1,4 +1,10 @@
 import { getFFmpeg } from "@/lib/ffmpeg";
+import { buildShortExportGeometry } from "@/lib/creator/core/export-geometry";
+import {
+  ffmpegColorWithAlpha,
+  ffmpegHexColorFromCss,
+  resolveCreatorSubtitleStyle,
+} from "@/lib/creator/subtitle-style";
 import type {
   CreatorShortEditorState,
   CreatorShortPlan,
@@ -69,21 +75,6 @@ async function ensureFontLoaded(ff: Awaited<ReturnType<typeof getFFmpeg>>): Prom
   }
 }
 
-function colorForStyleHex(style: CreatorShortPlan["subtitleStyle"]): {
-  fontcolor: string;
-  bordercolor: string;
-  boxcolor: string;
-  bold: boolean;
-} {
-  if (style === "creator_neon") {
-    return { fontcolor: "0xE8F7FF", bordercolor: "0x003D9C", boxcolor: "0x000000@0.47", bold: true };
-  }
-  if (style === "clean_caption") {
-    return { fontcolor: "0xFFFFFF", bordercolor: "0x323232", boxcolor: "0x000000@0.35", bold: false };
-  }
-  return { fontcolor: "0xFFFFFF", bordercolor: "0x0A0A0A", boxcolor: "0x000000@0.43", bold: true };
-}
-
 function wrapSubtitleText(text: string, maxCharsPerLine: number): string {
   const words = text.split(/\s+/);
   const lines: string[] = [];
@@ -126,7 +117,7 @@ function buildDrawtextSubtitleFilters(
 
   if (!chunks.length) return [];
 
-  const colors = colorForStyleHex(plan.subtitleStyle);
+  const style = resolveCreatorSubtitleStyle(plan.subtitleStyle, editor.subtitleStyle);
   const fontSize = Math.round(clamp(56 * editor.subtitleScale, 36, 96));
   // Estimate max chars per line: ~80% of output width / (fontSize * 0.55 avg char width)
   const maxCharsPerLine = Math.max(10, Math.round((OUTPUT_WIDTH * 0.80) / (fontSize * 0.55)));
@@ -135,107 +126,23 @@ function buildDrawtextSubtitleFilters(
 
   return chunks.map((chunk) => {
     const wrapped = wrapSubtitleText(chunk.text, maxCharsPerLine);
-    const escaped = drawtextEscape(wrapped);
+    const transformed = style.textCase === "uppercase" ? wrapped.toUpperCase() : wrapped;
+    const escaped = drawtextEscape(transformed);
     return (
       `drawtext=fontfile=${FONT_PATH}` +
       `:text='${escaped}'` +
       `:fontsize=${fontSize}` +
-      `:fontcolor=${colors.fontcolor}` +
-      `:borderw=3` +
-      `:bordercolor=${colors.bordercolor}` +
+      `:fontcolor=${ffmpegHexColorFromCss(style.textColor)}` +
+      `:borderw=${style.outlineWidth.toFixed(2)}` +
+      `:bordercolor=${ffmpegHexColorFromCss(style.outlineColor)}` +
       `:box=1` +
-      `:boxcolor=${colors.boxcolor}` +
-      `:boxborderw=8` +
+      `:boxcolor=${ffmpegColorWithAlpha(style.backgroundColor, style.backgroundOpacity)}` +
+      `:boxborderw=${style.backgroundPadding.toFixed(2)}` +
       `:x=${x}` +
       `:y=${y}` +
       `:enable='between(t,${(chunk.start + timeOffsetSeconds).toFixed(3)},${(chunk.end + timeOffsetSeconds).toFixed(3)})'`
     );
   });
-}
-
-
-function getFfmpegFilter(
-  sourceWidth: number,
-  sourceHeight: number,
-  editor: CreatorShortEditorState,
-  previewViewport: { width: number; height: number } | null,
-  previewVideoRect?: { width: number; height: number } | null
-): {
-  filter: string;
-  cropX: number;
-  cropY: number;
-  scaledWidth: number;
-  scaledHeight: number;
-  canvasWidth: number;
-  canvasHeight: number;
-  padX: number;
-  padY: number;
-} {
-  const viewportWidth = Math.max(1, previewViewport?.width ?? 320);
-  const viewportHeight = Math.max(1, previewViewport?.height ?? (viewportWidth * 16) / 9);
-
-
-  const baseScale = Math.min(OUTPUT_WIDTH / sourceWidth, OUTPUT_HEIGHT / sourceHeight);
-  const scaleFactor = baseScale * Math.max(0.2, editor.zoom || 1);
-  const scaledWidth = Math.max(1, Math.round(sourceWidth * scaleFactor));
-  const scaledHeight = Math.max(1, Math.round(sourceHeight * scaleFactor));
-
-  const panXOut = (editor.panX / viewportWidth) * OUTPUT_WIDTH;
-  const panYOut = (editor.panY / viewportHeight) * OUTPUT_HEIGHT;
-
-  const canvasWidth = Math.max(OUTPUT_WIDTH, scaledWidth);
-  const canvasHeight = Math.max(OUTPUT_HEIGHT, scaledHeight);
-
-  const padX = Math.round(
-    clamp(
-      (canvasWidth - scaledWidth) / 2 + (scaledWidth < OUTPUT_WIDTH ? panXOut : 0),
-      0,
-      Math.max(0, canvasWidth - scaledWidth)
-    )
-  );
-  const padY = Math.round(
-    clamp(
-      (canvasHeight - scaledHeight) / 2 + (scaledHeight < OUTPUT_HEIGHT ? panYOut : 0),
-      0,
-      Math.max(0, canvasHeight - scaledHeight)
-    )
-  );
-
-  const centerCropX = (canvasWidth - OUTPUT_WIDTH) / 2;
-  const centerCropY = (canvasHeight - OUTPUT_HEIGHT) / 2;
-  const cropX = Math.round(
-    clamp(
-      centerCropX - (scaledWidth >= OUTPUT_WIDTH ? panXOut : 0),
-      0,
-      Math.max(0, canvasWidth - OUTPUT_WIDTH)
-    )
-  );
-  const cropY = Math.round(
-    clamp(
-      centerCropY - (scaledHeight >= OUTPUT_HEIGHT ? panYOut : 0),
-      0,
-      Math.max(0, canvasHeight - OUTPUT_HEIGHT)
-    )
-  );
-
-  const filters = [`scale=${scaledWidth}:${scaledHeight}`];
-  if (canvasWidth !== scaledWidth || canvasHeight !== scaledHeight) {
-    filters.push(`pad=${canvasWidth}:${canvasHeight}:${padX}:${padY}:black`);
-  }
-  filters.push(`crop=${OUTPUT_WIDTH}:${OUTPUT_HEIGHT}:${cropX}:${cropY}`);
-  filters.push("format=yuv420p");
-
-  return {
-    filter: filters.join(","),
-    cropX,
-    cropY,
-    scaledWidth,
-    scaledHeight,
-    canvasWidth,
-    canvasHeight,
-    padX,
-    padY,
-  };
 }
 
 export interface LocalShortExportInput {
@@ -268,13 +175,15 @@ export async function exportShortVideoLocally(input: LocalShortExportInput): Pro
   );
   const outputPath = `out_${Date.now()}.mp4`;
 
-  const preview = getFfmpegFilter(
-    input.sourceVideoSize.width,
-    input.sourceVideoSize.height,
-    input.editor,
-    input.previewViewport ?? null,
-    input.previewVideoRect ?? null
-  );
+  const preview = buildShortExportGeometry({
+    sourceWidth: input.sourceVideoSize.width,
+    sourceHeight: input.sourceVideoSize.height,
+    editor: input.editor,
+    previewViewport: input.previewViewport ?? null,
+    previewVideoRect: input.previewVideoRect ?? null,
+    outputWidth: OUTPUT_WIDTH,
+    outputHeight: OUTPUT_HEIGHT,
+  });
 
   const clipDuration = Math.max(0.5, input.clip.endSeconds - input.clip.startSeconds);
   const inputSeekSeconds = Math.max(0, input.clip.startSeconds - FAST_SEEK_CUSHION_SECONDS);
@@ -459,7 +368,7 @@ export async function exportShortVideoLocally(input: LocalShortExportInput): Pro
           )}x${Math.round(input.previewViewport?.height ?? 0)}.`
         : "Preview parity source: computed from source dimensions + editor zoom.",
       usedSubtitleBurnIn
-        ? `Subtitles burned in at x=${input.editor.subtitleXPositionPct.toFixed(0)}%, y=${input.editor.subtitleYOffsetPct.toFixed(0)}%.`
+        ? `Subtitles burned in at x=${input.editor.subtitleXPositionPct.toFixed(0)}%, y=${input.editor.subtitleYOffsetPct.toFixed(0)}% using ${resolveCreatorSubtitleStyle(input.plan.subtitleStyle, input.editor.subtitleStyle).preset}.`
         : "Rendered without burned subtitles (subtitle filter unavailable or no subtitle chunks).",
     ];
 

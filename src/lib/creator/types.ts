@@ -127,6 +127,19 @@ export interface CreatorShortRenderRequest {
   editor: CreatorShortEditorState;
 }
 
+export type CreatorSubtitleTextCase = "original" | "uppercase";
+
+export interface CreatorSubtitleStyleSettings {
+  preset: CreatorVerticalEditorPreset["subtitleStyle"];
+  textColor: string;
+  backgroundColor: string;
+  backgroundOpacity: number;
+  outlineColor: string;
+  outlineWidth: number;
+  backgroundPadding: number;
+  textCase: CreatorSubtitleTextCase;
+}
+
 export interface CreatorShortEditorState {
   zoom: number;
   panX: number;
@@ -135,6 +148,7 @@ export interface CreatorShortEditorState {
   subtitleXPositionPct: number;
   subtitleYOffsetPct: number;
   showSafeZones?: boolean;
+  subtitleStyle?: Partial<CreatorSubtitleStyleSettings>;
 }
 
 export interface CreatorShortRenderResponse {
