@@ -13,6 +13,19 @@ export function clipSubtitleChunks(clip: CreatorViralClip, chunks: SubtitleChunk
   });
 }
 
+export function findSubtitleChunkAtTime(chunks: SubtitleChunk[], timeSeconds: number): SubtitleChunk | undefined {
+  if (!Number.isFinite(timeSeconds)) return undefined;
+
+  return chunks.find((chunk) => {
+    const start = chunk.timestamp?.[0];
+    if (typeof start !== "number" || !Number.isFinite(start)) return false;
+
+    const rawEnd = chunk.timestamp?.[1];
+    const end = typeof rawEnd === "number" && Number.isFinite(rawEnd) ? rawEnd : start;
+    return timeSeconds >= start && timeSeconds <= end;
+  });
+}
+
 export function clampClipToMediaDuration(clip: CreatorViralClip, mediaDurationSeconds: number): CreatorViralClip {
   const safeDuration = Number.isFinite(mediaDurationSeconds) ? mediaDurationSeconds : 0;
   if (safeDuration <= 0) return clip;

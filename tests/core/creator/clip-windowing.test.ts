@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { clampClipToMediaDuration, clipSubtitleChunks } from "../../../src/lib/creator/core/clip-windowing";
+import { clampClipToMediaDuration, clipSubtitleChunks, findSubtitleChunkAtTime } from "../../../src/lib/creator/core/clip-windowing";
 import type { CreatorViralClip } from "../../../src/lib/creator/types";
 import type { SubtitleChunk } from "../../../src/lib/history";
 
@@ -34,6 +34,18 @@ test("clipSubtitleChunks keeps only subtitle chunks that overlap clip range", ()
     selected.map((chunk) => chunk.text),
     ["overlap-start", "inside", "overlap-end"]
   );
+});
+
+test("findSubtitleChunkAtTime returns the subtitle active at the current playback time", () => {
+  const chunks: SubtitleChunk[] = [
+    { text: "first", timestamp: [8, 9.2] },
+    { text: "current", timestamp: [11.5, 13] },
+    { text: "open-ended", timestamp: [14.5, null] },
+  ];
+
+  assert.equal(findSubtitleChunkAtTime(chunks, 12.2)?.text, "current");
+  assert.equal(findSubtitleChunkAtTime(chunks, 14.5)?.text, "open-ended");
+  assert.equal(findSubtitleChunkAtTime(chunks, 10.1), undefined);
 });
 
 test("clampClipToMediaDuration preserves clip when media duration fully contains clip", () => {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import {
   ArrowLeft,
@@ -57,7 +57,7 @@ import {
   createManualFallbackPlan,
   deriveTrimNudgesFromSavedClip,
 } from "@/lib/creator/core/clip-editing";
-import { clipSubtitleChunks } from "@/lib/creator/core/clip-windowing";
+import { clipSubtitleChunks, findSubtitleChunkAtTime } from "@/lib/creator/core/clip-windowing";
 import { buildShortExportDiagnostics } from "@/lib/creator/core/export-diagnostics";
 import { prepareShortExport } from "@/lib/creator/core/export-prep";
 import {
@@ -74,7 +74,6 @@ import {
   CREATOR_SUBTITLE_STYLE_LABELS,
   cssRgbaFromHex,
   cssTextShadowFromStyle,
-  getSubtitleLetterWidthOffsets,
   getSubtitleMaxCharsPerLine,
   getDefaultCreatorSubtitleStyle,
   resolveCreatorSubtitleStyle,
@@ -157,10 +156,6 @@ function formatBytes(bytes: number): string {
 
 function clampNumber(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
-}
-
-function subtitleFillLayerOpacity(offsetPx: number): number {
-  return Math.abs(offsetPx) < 0.8 ? 0.3 : 0.22;
 }
 
 function SubtitlePreviewText({
@@ -537,7 +532,11 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
     if (video) setCurrentTime(video.currentTime);
   }, []);
   const handleVideoPlay = useCallback(() => setIsPlaying(true), []);
-  const handleVideoPause = useCallback(() => setIsPlaying(false), []);
+  const handleVideoPause = useCallback(() => {
+    const video = previewVideoRef.current;
+    if (video) setCurrentTime(video.currentTime);
+    setIsPlaying(false);
+  }, []);
   const handleVideoEnded = useCallback(() => setIsPlaying(false), []);
 
   const activeSavedShortProject = useMemo(() => {
@@ -650,6 +649,11 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
     if (!editedClip || !selectedSubtitle) return [];
     return clipSubtitleChunks(editedClip, selectedSubtitle.chunks);
   }, [editedClip, selectedSubtitle]);
+
+  const activePreviewSubtitleChunk = useMemo(
+    () => findSubtitleChunkAtTime(selectedClipSubtitleChunks, currentTime),
+    [currentTime, selectedClipSubtitleChunks]
+  );
 
   const resolvedSubtitleStyle = useMemo(() => {
     const fallback = selectedPlan?.subtitleStyle ?? "clean_caption";
@@ -1124,21 +1128,19 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
   };
 
   const previewSubtitleLine = useMemo(() => {
-    // While playing, sync subtitle to current playback time
-    if (isPlaying && selectedClipSubtitleChunks.length > 0 && editedClip) {
-      const matchingChunk = selectedClipSubtitleChunks.find((chunk) => {
-        const start = chunk.timestamp?.[0] ?? 0;
-        const end = chunk.timestamp?.[1] ?? start;
-        return currentTime >= start && currentTime <= end;
-      });
-      if (matchingChunk) {
-        return String(matchingChunk.text ?? "").trim().slice(0, 100);
-      }
-      return ""; // between chunks, show nothing
+    if (activePreviewSubtitleChunk) {
+      return String(activePreviewSubtitleChunk.text ?? "").trim().slice(0, 100);
     }
+
+    const isWithinClipBounds = !!editedClip && currentTime >= editedClip.startSeconds && currentTime <= editedClip.endSeconds;
+    const hasMovedAwayFromClipStart = !!editedClip && Math.abs(currentTime - editedClip.startSeconds) > 0.05;
+    if (selectedClipSubtitleChunks.length > 0 && isWithinClipBounds && (isPlaying || hasMovedAwayFromClipStart)) {
+      return "";
+    }
+
     if (!clipTextPreview) return "Add subtitles + punchy hook text";
     return clipTextPreview.split(/(?<=[.!?])\s+/)[0]?.slice(0, 80) || clipTextPreview.slice(0, 80);
-  }, [clipTextPreview, currentTime, editedClip, isPlaying, selectedClipSubtitleChunks]);
+  }, [activePreviewSubtitleChunk, clipTextPreview, currentTime, editedClip, isPlaying, selectedClipSubtitleChunks.length]);
 
   const previewSubtitleDisplayLine = useMemo(() => {
     if (!previewSubtitleLine) return "";
