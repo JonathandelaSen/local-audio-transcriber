@@ -406,12 +406,17 @@ export async function exportShortVideoLocally(input: LocalShortExportInput): Pro
             input.previewViewport?.width ?? 0
           )}x${Math.round(input.previewViewport?.height ?? 0)}.`
         : "Preview parity source: computed from source dimensions + editor zoom.",
-      usedSubtitleBurnIn
+      input.editor.showSubtitles === false
+        ? "Rendered without burned subtitles (disabled in the editor)."
+        : usedSubtitleBurnIn
         ? `Subtitles burned in at x=${input.editor.subtitleXPositionPct.toFixed(0)}%, y=${input.editor.subtitleYOffsetPct.toFixed(0)}% using ${effectiveSubtitleStyle.preset}.`
         : "Rendered without burned subtitles (subtitle filter unavailable or no subtitle chunks).",
       "Export uses a single outline/shadow pass with subtle fill spreads so wider letters do not duplicate borders.",
       `Letter width scale ${effectiveSubtitleStyle.letterWidth.toFixed(2)}x.`,
       `Subtitle styling uses text border ${effectiveSubtitleStyle.borderWidth.toFixed(1)}px plus shadow ${effectiveSubtitleStyle.shadowDistance.toFixed(1)}px.`,
+      effectiveSubtitleStyle.backgroundEnabled
+        ? `Subtitle background enabled with ${Math.round(effectiveSubtitleStyle.backgroundOpacity * 100)}% opacity, ${effectiveSubtitleStyle.backgroundRadius.toFixed(0)}px radius, and ${effectiveSubtitleStyle.backgroundPaddingX.toFixed(0)}x${effectiveSubtitleStyle.backgroundPaddingY.toFixed(0)}px padding.`
+        : "Subtitle background disabled.",
     ];
 
     return {

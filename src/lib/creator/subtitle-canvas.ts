@@ -3,7 +3,7 @@
  *
  * Renders subtitle chunks to transparent 1080×1920 PNGs using OffscreenCanvas.
  * The rendering mirrors `SubtitlePreviewText` in CreatorHub.tsx exactly:
- *   - fill-spread passes (faux bold / letter-width)
+ *   - optional rounded subtitle background box
  *   - stroke pass (outline)
  *   - shadow
  *   - main fill
@@ -14,9 +14,7 @@
 
 import {
   cssRgbaFromHex,
-  getSubtitleLetterWidthOffsets,
   getSubtitleMaxCharsPerLine,
-  getSubtitleWeightBoostOffsets,
   resolveCreatorSubtitleStyle,
   wrapSubtitleLines,
 } from "@/lib/creator/subtitle-style";
@@ -67,6 +65,34 @@ async function ensureCanvasFont(): Promise<boolean> {
   }
 }
 
+function drawRoundedRect(
+  ctx: OffscreenCanvasRenderingContext2D,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  radius: number
+) {
+  const safeRadius = Math.max(0, Math.min(radius, width / 2, height / 2));
+  ctx.beginPath();
+  if (safeRadius <= 0) {
+    ctx.rect(x, y, width, height);
+    ctx.closePath();
+    return;
+  }
+
+  ctx.moveTo(x + safeRadius, y);
+  ctx.lineTo(x + width - safeRadius, y);
+  ctx.quadraticCurveTo(x + width, y, x + width, y + safeRadius);
+  ctx.lineTo(x + width, y + height - safeRadius);
+  ctx.quadraticCurveTo(x + width, y + height, x + width - safeRadius, y + height);
+  ctx.lineTo(x + safeRadius, y + height);
+  ctx.quadraticCurveTo(x, y + height, x, y + height - safeRadius);
+  ctx.lineTo(x, y + safeRadius);
+  ctx.quadraticCurveTo(x, y, x + safeRadius, y);
+  ctx.closePath();
+}
+
 // ─── Single‑chunk renderer ──────────────────────────────────────────────────
 
 function renderChunk(
@@ -82,60 +108,72 @@ function renderChunk(
 
   const lineHeight = Math.round(fontSize * 1.18);
   const fontSpec = `700 ${fontSize}px InterSubtitle, Inter, sans-serif`;
-
-  // Vertical start: center the whole block around anchorY
-  const blockH = (lines.length - 1) * lineHeight + fontSize;
-  const blockTop = anchorY - blockH / 2;
-
-  // Letter width: apply via horizontal scale (same effect as CSS scaleX)
   const letterScale = Math.max(1, Math.min(1.5, style.letterWidth));
 
   ctx.textAlign = "center";
   ctx.textBaseline = "top";
   ctx.font = fontSpec;
+  const textBlockHeight = (lines.length - 1) * lineHeight + fontSize;
+  const blockTop = -(textBlockHeight / 2);
+  const maxLineWidth = lines.reduce((max, line) => Math.max(max, ctx.measureText(line).width), 0);
+  const hasBackground = style.backgroundEnabled && style.backgroundOpacity > 0;
+
+  ctx.save();
+  ctx.translate(anchorX, anchorY);
+  ctx.scale(letterScale, 1);
+
+  if (hasBackground) {
+    const backgroundX = -(maxLineWidth / 2) - style.backgroundPaddingX;
+    const backgroundY = blockTop - style.backgroundPaddingY;
+    const backgroundWidth = maxLineWidth + style.backgroundPaddingX * 2;
+    const backgroundHeight = textBlockHeight + style.backgroundPaddingY * 2;
+    ctx.save();
+    drawRoundedRect(
+      ctx,
+      backgroundX,
+      backgroundY,
+      backgroundWidth,
+      backgroundHeight,
+      style.backgroundRadius
+    );
+    ctx.fillStyle = cssRgbaFromHex(style.backgroundColor, style.backgroundOpacity);
+    ctx.fill();
+    ctx.restore();
+  }
 
   lines.forEach((line, i) => {
-    const textX = anchorX;
     const textY = blockTop + i * lineHeight;
 
-    // 1. Shadow pass — dedicated fillText so shadow renders independently
     if (style.shadowOpacity > 0 && style.shadowDistance > 0) {
       ctx.save();
-      ctx.translate(textX, textY);
-      ctx.scale(letterScale, 1);
       ctx.shadowColor = cssRgbaFromHex(style.shadowColor, style.shadowOpacity);
       ctx.shadowOffsetX = style.shadowDistance;
       ctx.shadowOffsetY = style.shadowDistance;
       ctx.shadowBlur = 0;
       ctx.fillStyle = cssRgbaFromHex(style.textColor, 1);
       ctx.font = fontSpec;
-      ctx.fillText(line, 0, 0);
+      ctx.fillText(line, 0, textY);
       ctx.restore();
     }
 
-    // 2. Stroke (outline) pass — matches WebkitTextStroke + paintOrder: stroke fill
     if (style.borderWidth > 0) {
       ctx.save();
-      ctx.translate(textX, textY);
-      ctx.scale(letterScale, 1);
       ctx.strokeStyle = cssRgbaFromHex(style.borderColor, 0.95);
-      // CSS WebkitTextStroke radiates outward; canvas stroke is centered → ×2
       ctx.lineWidth = style.borderWidth * 2;
       ctx.lineJoin = "round";
       ctx.font = fontSpec;
-      ctx.strokeText(line, 0, 0);
+      ctx.strokeText(line, 0, textY);
       ctx.restore();
     }
 
-    // 3. Main fill (paintOrder: stroke fill → fill is on top of stroke)
     ctx.save();
-    ctx.translate(textX, textY);
-    ctx.scale(letterScale, 1);
     ctx.fillStyle = cssRgbaFromHex(style.textColor, 1);
     ctx.font = fontSpec;
-    ctx.fillText(line, 0, 0);
+    ctx.fillText(line, 0, textY);
     ctx.restore();
   });
+
+  ctx.restore();
 
   return canvas;
 }
@@ -149,6 +187,10 @@ export async function renderSubtitlesToPngs(
   editor: CreatorShortEditorState,
   timeOffsetSeconds: number
 ): Promise<SubtitlePngFrame[]> {
+  if ((editor.showSubtitles ?? true) === false || subtitleChunks.length === 0) {
+    return [];
+  }
+
   const fontLoaded = await ensureCanvasFont();
   if (!fontLoaded) {
     console.warn("subtitle-canvas: Inter font failed to load — PNGs will use fallback font");

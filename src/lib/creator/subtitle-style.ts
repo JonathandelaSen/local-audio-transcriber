@@ -41,6 +41,12 @@ const DEFAULT_SUBTITLE_STYLE_BY_PRESET: Record<SubtitleStylePreset, Omit<Creator
     shadowOpacity: 0.44,
     shadowDistance: 3.2,
     textCase: "uppercase",
+    backgroundEnabled: false,
+    backgroundColor: "#111111",
+    backgroundOpacity: 0.8,
+    backgroundRadius: 28,
+    backgroundPaddingX: 26,
+    backgroundPaddingY: 14,
   },
   clean_caption: {
     textColor: "#FFFFFF",
@@ -51,6 +57,12 @@ const DEFAULT_SUBTITLE_STYLE_BY_PRESET: Record<SubtitleStylePreset, Omit<Creator
     shadowOpacity: 0.32,
     shadowDistance: 2.2,
     textCase: "original",
+    backgroundEnabled: false,
+    backgroundColor: "#111111",
+    backgroundOpacity: 0.72,
+    backgroundRadius: 22,
+    backgroundPaddingX: 22,
+    backgroundPaddingY: 11,
   },
   creator_neon: {
     textColor: "#E8F7FF",
@@ -61,6 +73,12 @@ const DEFAULT_SUBTITLE_STYLE_BY_PRESET: Record<SubtitleStylePreset, Omit<Creator
     shadowOpacity: 0.48,
     shadowDistance: 2.8,
     textCase: "original",
+    backgroundEnabled: false,
+    backgroundColor: "#08111F",
+    backgroundOpacity: 0.74,
+    backgroundRadius: 24,
+    backgroundPaddingX: 24,
+    backgroundPaddingY: 12,
   },
 };
 
@@ -83,7 +101,11 @@ function normalizeHexColor(input: string | undefined, fallback: string): string 
 }
 
 function normalizeTextCase(input: unknown, fallback: CreatorSubtitleTextCase): CreatorSubtitleTextCase {
-  return input === "uppercase" ? "uppercase" : fallback;
+  return input === "uppercase" || input === "original" ? input : fallback;
+}
+
+function normalizeBoolean(input: unknown, fallback: boolean): boolean {
+  return typeof input === "boolean" ? input : fallback;
 }
 
 function resolvePreset(input: unknown, fallback: SubtitleStylePreset): SubtitleStylePreset {
@@ -119,6 +141,13 @@ export function resolveCreatorSubtitleStyle(
 ): CreatorSubtitleStyleSettings {
   const preset = resolvePreset(input?.preset, fallbackPreset);
   const defaults = getDefaultCreatorSubtitleStyle(preset);
+  const hasLegacyBackgroundConfig =
+    typeof input?.backgroundColor === "string" ||
+    typeof input?.backgroundOpacity === "number" ||
+    typeof input?.backgroundRadius === "number" ||
+    typeof input?.backgroundPadding === "number" ||
+    typeof input?.backgroundPaddingX === "number" ||
+    typeof input?.backgroundPaddingY === "number";
 
   return {
     preset,
@@ -144,6 +173,33 @@ export function resolveCreatorSubtitleStyle(
       12
     ),
     textCase: normalizeTextCase(input?.textCase, defaults.textCase),
+    backgroundEnabled: normalizeBoolean(
+      input?.backgroundEnabled,
+      hasLegacyBackgroundConfig ? true : defaults.backgroundEnabled
+    ),
+    backgroundColor: normalizeHexColor(input?.backgroundColor, defaults.backgroundColor),
+    backgroundOpacity: clampNumber(
+      pickFiniteNumber(input?.backgroundOpacity, defaults.backgroundOpacity) ?? defaults.backgroundOpacity,
+      0,
+      1
+    ),
+    backgroundRadius: clampNumber(
+      pickFiniteNumber(input?.backgroundRadius, defaults.backgroundRadius) ?? defaults.backgroundRadius,
+      0,
+      80
+    ),
+    backgroundPaddingX: clampNumber(
+      pickFiniteNumber(input?.backgroundPaddingX, input?.backgroundPadding, defaults.backgroundPaddingX) ??
+        defaults.backgroundPaddingX,
+      0,
+      80
+    ),
+    backgroundPaddingY: clampNumber(
+      pickFiniteNumber(input?.backgroundPaddingY, input?.backgroundPadding, defaults.backgroundPaddingY) ??
+        defaults.backgroundPaddingY,
+      0,
+      48
+    ),
   };
 }
 
@@ -288,6 +344,25 @@ export const COMMON_SUBTITLE_STYLE_PRESETS: CreatorSubtitleQuickStylePreset[] = 
       borderWidth: 2.8,
       shadowOpacity: 0.18,
       shadowDistance: 1.2,
+      textCase: "original",
+    },
+  },
+  {
+    id: "boxed_focus",
+    name: "Boxed Focus",
+    description: "High-contrast subtitles with a soft rounded background for busy footage.",
+    style: {
+      ...getDefaultCreatorSubtitleStyle("clean_caption"),
+      preset: "clean_caption",
+      borderWidth: 2.2,
+      shadowOpacity: 0.18,
+      shadowDistance: 1.4,
+      backgroundEnabled: true,
+      backgroundColor: "#111111",
+      backgroundOpacity: 0.78,
+      backgroundRadius: 26,
+      backgroundPaddingX: 24,
+      backgroundPaddingY: 12,
       textCase: "original",
     },
   },

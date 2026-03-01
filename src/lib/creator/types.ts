@@ -139,6 +139,12 @@ export interface CreatorSubtitleStyleSettings {
   shadowOpacity: number;
   shadowDistance: number;
   textCase: CreatorSubtitleTextCase;
+  backgroundEnabled: boolean;
+  backgroundColor: string;
+  backgroundOpacity: number;
+  backgroundRadius: number;
+  backgroundPaddingX: number;
+  backgroundPaddingY: number;
 }
 
 export interface CreatorShortEditorState {
@@ -148,6 +154,7 @@ export interface CreatorShortEditorState {
   subtitleScale: number;
   subtitleXPositionPct: number;
   subtitleYOffsetPct: number;
+  showSubtitles?: boolean;
   showSafeZones?: boolean;
   subtitleStyle?: Partial<CreatorSubtitleStyleSettings>;
 }

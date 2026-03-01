@@ -10,7 +10,7 @@ import {
   resolveCreatorSubtitleStyle,
 } from "../../../src/lib/creator/subtitle-style";
 
-test("getDefaultCreatorSubtitleStyle returns text-only styling defaults", () => {
+test("getDefaultCreatorSubtitleStyle returns styling defaults with subtitle background config", () => {
   const style = getDefaultCreatorSubtitleStyle("clean_caption");
 
   assert.equal(style.preset, "clean_caption");
@@ -20,10 +20,15 @@ test("getDefaultCreatorSubtitleStyle returns text-only styling defaults", () => 
   assert.equal(style.shadowColor, "#000000");
   assert.equal(style.shadowOpacity, 0.32);
   assert.equal(style.shadowDistance, 2.2);
-  assert.equal(Object.prototype.hasOwnProperty.call(style, "backgroundColor"), false);
+  assert.equal(style.backgroundEnabled, false);
+  assert.equal(style.backgroundColor, "#111111");
+  assert.equal(style.backgroundOpacity, 0.72);
+  assert.equal(style.backgroundRadius, 22);
+  assert.equal(style.backgroundPaddingX, 22);
+  assert.equal(style.backgroundPaddingY, 11);
 });
 
-test("resolveCreatorSubtitleStyle maps legacy outline settings and drops legacy background fields", () => {
+test("resolveCreatorSubtitleStyle maps legacy outline and background settings", () => {
   const style = resolveCreatorSubtitleStyle("clean_caption", {
     outlineColor: "#101010",
     outlineWidth: 4.5,
@@ -41,7 +46,12 @@ test("resolveCreatorSubtitleStyle maps legacy outline settings and drops legacy 
   assert.equal(style.shadowOpacity, 0.32);
   assert.equal(style.shadowDistance, 2.2);
   assert.equal(style.textCase, "uppercase");
-  assert.equal(Object.prototype.hasOwnProperty.call(style, "backgroundColor"), false);
+  assert.equal(style.backgroundEnabled, true);
+  assert.equal(style.backgroundColor, "#FF00FF");
+  assert.equal(style.backgroundOpacity, 0.95);
+  assert.equal(style.backgroundRadius, 24);
+  assert.equal(style.backgroundPaddingX, 12);
+  assert.equal(style.backgroundPaddingY, 12);
 });
 
 test("resolveCreatorSubtitleStyle clamps letter width into the supported export range", () => {
@@ -50,6 +60,14 @@ test("resolveCreatorSubtitleStyle clamps letter width into the supported export 
   });
 
   assert.equal(style.letterWidth, CREATOR_SUBTITLE_MAX_LETTER_WIDTH);
+});
+
+test("resolveCreatorSubtitleStyle honors switching text case back to original", () => {
+  const style = resolveCreatorSubtitleStyle("bold_pop", {
+    textCase: "original",
+  });
+
+  assert.equal(style.textCase, "original");
 });
 
 test("getSubtitleLetterWidthOffsets only widens text when the setting is meaningfully above default", () => {

@@ -176,6 +176,7 @@ function SubtitlePreviewText({
   className?: string;
 }) {
   const letterScale = Math.max(1, Math.min(1.5, subtitleStyle.letterWidth));
+  const hasBackground = subtitleStyle.backgroundEnabled && subtitleStyle.backgroundOpacity > 0;
 
   return (
     <span
@@ -201,6 +202,11 @@ function SubtitlePreviewText({
           WebkitTextStroke: `${borderWidthPx.toFixed(2)}px ${cssRgbaFromHex(subtitleStyle.borderColor, 0.95)}`,
           textShadow: cssTextShadowFromStyle(subtitleStyle, shadowScale),
           paintOrder: "stroke fill",
+          background: hasBackground ? cssRgbaFromHex(subtitleStyle.backgroundColor, subtitleStyle.backgroundOpacity) : "transparent",
+          borderRadius: hasBackground ? `${subtitleStyle.backgroundRadius * shadowScale}px` : undefined,
+          padding: hasBackground
+            ? `${subtitleStyle.backgroundPaddingY * shadowScale}px ${subtitleStyle.backgroundPaddingX * shadowScale}px`
+            : undefined,
         }}
       >
         {text}
@@ -355,6 +361,7 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
   const [subtitleXPositionPct, setSubtitleXPositionPct] = useState(50);
   const [subtitleYOffsetPct, setSubtitleYOffsetPct] = useState(78);
   const [subtitleStyleOverrides, setSubtitleStyleOverrides] = useState<Partial<CreatorSubtitleStyleSettings>>({});
+  const [showSubtitles, setShowSubtitles] = useState(true);
   const [showSafeZones, setShowSafeZones] = useState(true);
   const [activeSavedShortProjectId, setActiveSavedShortProjectId] = useState<string>("");
   const [detachedShortSelection, setDetachedShortSelection] = useState<{ clip: CreatorViralClip; plan: CreatorShortPlan } | null>(null);
@@ -524,6 +531,7 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
     setIsPlaying(false);
     setShortProjectNameDraft("");
     setSubtitleStyleOverrides({});
+    setShowSubtitles(true);
   }, [selectedProject?.id]);
 
   // Video event callbacks — attached as JSX props on the <video>, no effect needed
@@ -668,10 +676,11 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
       subtitleScale,
       subtitleXPositionPct,
       subtitleYOffsetPct,
+      showSubtitles,
       subtitleStyle: subtitleStyleOverrides,
       showSafeZones,
     }),
-    [panX, panY, showSafeZones, subtitleScale, subtitleStyleOverrides, subtitleXPositionPct, subtitleYOffsetPct, zoom]
+    [panX, panY, showSafeZones, showSubtitles, subtitleScale, subtitleStyleOverrides, subtitleXPositionPct, subtitleYOffsetPct, zoom]
   );
 
   useEffect(() => {
@@ -881,6 +890,7 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
     setSubtitleXPositionPct(project.editor.subtitleXPositionPct ?? 50);
     setSubtitleYOffsetPct(project.editor.subtitleYOffsetPct);
     setSubtitleStyleOverrides(resolveCreatorSubtitleStyle(project.plan.subtitleStyle, project.editor.subtitleStyle));
+    setShowSubtitles(project.editor.showSubtitles ?? true);
     setShowSafeZones(project.editor.showSafeZones ?? true);
   }, []);
 
@@ -1128,6 +1138,7 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
   };
 
   const previewSubtitleLine = useMemo(() => {
+    if (!showSubtitles) return "";
     if (activePreviewSubtitleChunk) {
       return String(activePreviewSubtitleChunk.text ?? "").trim().slice(0, 100);
     }
@@ -1140,7 +1151,7 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
 
     if (!clipTextPreview) return "Add subtitles + punchy hook text";
     return clipTextPreview.split(/(?<=[.!?])\s+/)[0]?.slice(0, 80) || clipTextPreview.slice(0, 80);
-  }, [activePreviewSubtitleChunk, clipTextPreview, currentTime, editedClip, isPlaying, selectedClipSubtitleChunks.length]);
+  }, [activePreviewSubtitleChunk, clipTextPreview, currentTime, editedClip, isPlaying, selectedClipSubtitleChunks.length, showSubtitles]);
 
   const previewSubtitleDisplayLine = useMemo(() => {
     if (!previewSubtitleLine) return "";
@@ -2035,7 +2046,7 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
                             </>
                           )}
 
-                          {previewWrappedSubtitleLine && (() => {
+                          {showSubtitles && previewWrappedSubtitleLine && (() => {
                             // Render the preview subtitle in the same coordinate space as the FFmpeg export.
                             // previewScale maps the 1080 px export canvas onto the preview frame pixels.
                             const previewScale = previewFrameWidth > 0 ? previewFrameWidth / 1080 : 1;
@@ -2253,181 +2264,297 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
 
                           <div className="rounded-xl border border-white/10 bg-black/20 p-4 space-y-3">
                             <div className="text-xs uppercase tracking-wider text-white/50">Subtitles</div>
-                            <label className="text-xs text-white/70 block">Subtitle scale: {subtitleScale.toFixed(2)}x</label>
-                            <input type="range" min={0.7} max={1.8} step={0.01} value={subtitleScale} onChange={(e) => setSubtitleScale(Number(e.target.value))} className="w-full" />
-                            <label className="text-xs text-white/70 block">Subtitle horizontal position: {subtitleXPositionPct.toFixed(0)}%</label>
-                            <input type="range" min={10} max={90} step={1} value={subtitleXPositionPct} onChange={(e) => setSubtitleXPositionPct(Number(e.target.value))} className="w-full" />
-                            <label className="text-xs text-white/70 block">Subtitle vertical position: {subtitleYOffsetPct.toFixed(0)}%</label>
-                            <input type="range" min={45} max={92} step={1} value={subtitleYOffsetPct} onChange={(e) => setSubtitleYOffsetPct(Number(e.target.value))} className="w-full" />
-                            <div className="space-y-2 pt-1">
-                              <div className="text-xs text-white/70">Quick styles</div>
-                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                                {COMMON_SUBTITLE_STYLE_PRESETS.map((quick) => (
-                                  <button
-                                    key={quick.id}
-                                    type="button"
-                                    onClick={() => {
-                                      setSubtitleStyleOverrides({ ...quick.style });
-                                    }}
-                                    className="rounded-xl border border-white/10 bg-white/[0.06] hover:bg-white/[0.09] text-left p-2.5 transition-colors"
-                                  >
-                                    <div className="mb-2 rounded-lg border border-white/10 bg-[linear-gradient(135deg,rgba(3,7,18,0.92),rgba(19,34,54,0.82)_55%,rgba(88,28,135,0.35))] px-3 py-3 shadow-inner">
-                                      <SubtitlePreviewText
-                                        text="Make it readable"
-                                        subtitleStyle={quick.style}
-                                        fontSizePx={15}
-                                        lineHeightPx={16.5}
-                                        borderWidthPx={1.4}
-                                        shadowScale={0.45}
-                                        className="text-center"
-                                      />
-                                    </div>
-                                    <div className="text-xs font-semibold text-white/90">{quick.name}</div>
-                                    <div className="text-[11px] text-white/55 mt-0.5 leading-relaxed">{quick.description}</div>
-                                  </button>
-                                ))}
-                              </div>
-                            </div>
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
-                              <label className="text-xs text-white/70 block">
-                                Text color
-                                <input
-                                  type="color"
-                                  value={resolvedSubtitleStyle.textColor}
-                                  onChange={(e) => {
-                                    setSubtitleStyleOverrides((prev) => ({ ...prev, textColor: e.target.value.toUpperCase() }));
-                                  }}
-                                  className="mt-1 h-9 w-full rounded-md border border-white/10 bg-white/5"
-                                />
-                              </label>
-                              <label className="text-xs text-white/70 block">
-                                Letter border color
-                                <input
-                                  type="color"
-                                  value={resolvedSubtitleStyle.borderColor}
-                                  onChange={(e) => {
-                                    setSubtitleStyleOverrides((prev) => ({ ...prev, borderColor: e.target.value.toUpperCase() }));
-                                  }}
-                                  className="mt-1 h-9 w-full rounded-md border border-white/10 bg-white/5"
-                                />
-                              </label>
-                              <label className="text-xs text-white/70 block">
-                                Letter shadow color
-                                <input
-                                  type="color"
-                                  value={resolvedSubtitleStyle.shadowColor}
-                                  onChange={(e) => {
-                                    setSubtitleStyleOverrides((prev) => ({ ...prev, shadowColor: e.target.value.toUpperCase() }));
-                                  }}
-                                  className="mt-1 h-9 w-full rounded-md border border-white/10 bg-white/5"
-                                />
-                              </label>
-                              <label className="text-xs text-white/70 block">
-                                Style preset
-                                <Select
-                                  value={resolvedSubtitleStyle.preset}
-                                  onValueChange={(value) => {
-                                    if (value !== "bold_pop" && value !== "clean_caption" && value !== "creator_neon") return;
-                                    setSubtitleStyleOverrides(getDefaultCreatorSubtitleStyle(value));
-                                  }}
-                                >
-                                  <SelectTrigger className="mt-1 h-9 w-full bg-white/5 border-white/10 text-white/90">
-                                    <SelectValue />
-                                  </SelectTrigger>
-                                  <SelectContent className="bg-zinc-950 border-white/10 text-white/90">
-                                    {(["bold_pop", "clean_caption", "creator_neon"] as const).map((preset) => (
-                                      <SelectItem key={preset} value={preset} className="focus:bg-cyan-500/20 cursor-pointer">
-                                        {CREATOR_SUBTITLE_STYLE_LABELS[preset]}
-                                      </SelectItem>
+                            <label className="flex items-start gap-2 rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-white/80">
+                              <input
+                                type="checkbox"
+                                checked={!showSubtitles}
+                                onChange={(e) => setShowSubtitles(!e.target.checked)}
+                                className="mt-0.5"
+                              />
+                              <span className="leading-relaxed">
+                                Disable subtitles for this short. Preview and export will render without subtitles until you turn them back on.
+                              </span>
+                            </label>
+                            {showSubtitles ? (
+                              <>
+                                <label className="text-xs text-white/70 block">Subtitle scale: {subtitleScale.toFixed(2)}x</label>
+                                <input type="range" min={0.7} max={1.8} step={0.01} value={subtitleScale} onChange={(e) => setSubtitleScale(Number(e.target.value))} className="w-full" />
+                                <label className="text-xs text-white/70 block">Subtitle horizontal position: {subtitleXPositionPct.toFixed(0)}%</label>
+                                <input type="range" min={10} max={90} step={1} value={subtitleXPositionPct} onChange={(e) => setSubtitleXPositionPct(Number(e.target.value))} className="w-full" />
+                                <label className="text-xs text-white/70 block">Subtitle vertical position: {subtitleYOffsetPct.toFixed(0)}%</label>
+                                <input type="range" min={45} max={92} step={1} value={subtitleYOffsetPct} onChange={(e) => setSubtitleYOffsetPct(Number(e.target.value))} className="w-full" />
+                                <div className="space-y-2 pt-1">
+                                  <div className="text-xs text-white/70">Quick styles</div>
+                                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                    {COMMON_SUBTITLE_STYLE_PRESETS.map((quick) => (
+                                      <button
+                                        key={quick.id}
+                                        type="button"
+                                        onClick={() => {
+                                          setSubtitleStyleOverrides({ ...quick.style });
+                                        }}
+                                        className="rounded-xl border border-white/10 bg-white/[0.06] hover:bg-white/[0.09] text-left p-2.5 transition-colors"
+                                      >
+                                        <div className="mb-2 rounded-lg border border-white/10 bg-[linear-gradient(135deg,rgba(3,7,18,0.92),rgba(19,34,54,0.82)_55%,rgba(88,28,135,0.35))] px-3 py-3 shadow-inner">
+                                          <SubtitlePreviewText
+                                            text="Make it readable"
+                                            subtitleStyle={quick.style}
+                                            fontSizePx={15}
+                                            lineHeightPx={16.5}
+                                            borderWidthPx={1.4}
+                                            shadowScale={0.45}
+                                            className="text-center"
+                                          />
+                                        </div>
+                                        <div className="text-xs font-semibold text-white/90">{quick.name}</div>
+                                        <div className="text-[11px] text-white/55 mt-0.5 leading-relaxed">{quick.description}</div>
+                                      </button>
                                     ))}
-                                  </SelectContent>
-                                </Select>
-                              </label>
-                            </div>
-                            <div className="rounded-xl border border-cyan-400/15 bg-cyan-400/8 px-3 py-2 text-[11px] leading-relaxed text-cyan-100/80">
-                              Subtitle boxes are off. Readability now comes from the text color, letter border, and shadow only.
-                            </div>
-                            <label className="text-xs text-white/70 block">Letter width: {resolvedSubtitleStyle.letterWidth.toFixed(2)}x</label>
-                            <input
-                              type="range"
-                              min={1}
-                              max={1.5}
-                              step={0.01}
-                              value={resolvedSubtitleStyle.letterWidth}
-                              onChange={(e) => {
-                                setSubtitleStyleOverrides((prev) => ({ ...prev, letterWidth: Number(e.target.value) }));
-                              }}
-                              className="w-full"
-                            />
-                            <label className="text-xs text-white/70 block">Letter border width: {resolvedSubtitleStyle.borderWidth.toFixed(1)}px</label>
-                            <input
-                              type="range"
-                              min={0}
-                              max={8}
-                              step={0.1}
-                              value={resolvedSubtitleStyle.borderWidth}
-                              onChange={(e) => {
-                                setSubtitleStyleOverrides((prev) => ({ ...prev, borderWidth: Number(e.target.value) }));
-                              }}
-                              className="w-full"
-                            />
-                            <label className="text-xs text-white/70 block">
-                              Shadow opacity: {Math.round(resolvedSubtitleStyle.shadowOpacity * 100)}%
-                            </label>
-                            <input
-                              type="range"
-                              min={0}
-                              max={1}
-                              step={0.01}
-                              value={resolvedSubtitleStyle.shadowOpacity}
-                              onChange={(e) => {
-                                setSubtitleStyleOverrides((prev) => ({ ...prev, shadowOpacity: Number(e.target.value) }));
-                              }}
-                              className="w-full"
-                            />
-                            <label className="text-xs text-white/70 block">Shadow distance: {resolvedSubtitleStyle.shadowDistance.toFixed(1)}px</label>
-                            <input
-                              type="range"
-                              min={0}
-                              max={8}
-                              step={0.1}
-                              value={resolvedSubtitleStyle.shadowDistance}
-                              onChange={(e) => {
-                                setSubtitleStyleOverrides((prev) => ({ ...prev, shadowDistance: Number(e.target.value) }));
-                              }}
-                              className="w-full"
-                            />
-                            <label className="text-xs text-white/70 block">
-                              Text case
-                              <Select
-                                value={resolvedSubtitleStyle.textCase}
-                                onValueChange={(value) => {
-                                  if (value !== "original" && value !== "uppercase") return;
-                                  setSubtitleStyleOverrides((prev) => ({ ...prev, textCase: value }));
-                                }}
-                              >
-                                <SelectTrigger className="mt-1 h-9 w-full bg-white/5 border-white/10 text-white/90">
-                                  <SelectValue />
-                                </SelectTrigger>
-                                <SelectContent className="bg-zinc-950 border-white/10 text-white/90">
-                                  <SelectItem value="original" className="focus:bg-cyan-500/20 cursor-pointer">Original</SelectItem>
-                                  <SelectItem value="uppercase" className="focus:bg-cyan-500/20 cursor-pointer">Uppercase</SelectItem>
-                                </SelectContent>
-                              </Select>
-                            </label>
-                            <div className="flex justify-end">
-                              <Button
-                                type="button"
-                                size="sm"
-                                variant="ghost"
-                                className="h-7 px-2 text-xs bg-white/5 hover:bg-white/10 text-white/80"
-                                onClick={() => {
-                                  setSubtitleStyleOverrides({});
-                                }}
-                              >
-                                Use Plan Default Style
-                              </Button>
-                            </div>
+                                  </div>
+                                </div>
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                                  <label className="text-xs text-white/70 block">
+                                    Text color
+                                    <input
+                                      type="color"
+                                      value={resolvedSubtitleStyle.textColor}
+                                      onChange={(e) => {
+                                        setSubtitleStyleOverrides((prev) => ({ ...prev, textColor: e.target.value.toUpperCase() }));
+                                      }}
+                                      className="mt-1 h-9 w-full rounded-md border border-white/10 bg-white/5"
+                                    />
+                                  </label>
+                                  <label className="text-xs text-white/70 block">
+                                    Letter border color
+                                    <input
+                                      type="color"
+                                      value={resolvedSubtitleStyle.borderColor}
+                                      onChange={(e) => {
+                                        setSubtitleStyleOverrides((prev) => ({ ...prev, borderColor: e.target.value.toUpperCase() }));
+                                      }}
+                                      className="mt-1 h-9 w-full rounded-md border border-white/10 bg-white/5"
+                                    />
+                                  </label>
+                                  <label className="text-xs text-white/70 block">
+                                    Letter shadow color
+                                    <input
+                                      type="color"
+                                      value={resolvedSubtitleStyle.shadowColor}
+                                      onChange={(e) => {
+                                        setSubtitleStyleOverrides((prev) => ({ ...prev, shadowColor: e.target.value.toUpperCase() }));
+                                      }}
+                                      className="mt-1 h-9 w-full rounded-md border border-white/10 bg-white/5"
+                                    />
+                                  </label>
+                                  <label className="text-xs text-white/70 block">
+                                    Style preset
+                                    <Select
+                                      value={resolvedSubtitleStyle.preset}
+                                      onValueChange={(value) => {
+                                        if (value !== "bold_pop" && value !== "clean_caption" && value !== "creator_neon") return;
+                                        setSubtitleStyleOverrides(getDefaultCreatorSubtitleStyle(value));
+                                      }}
+                                    >
+                                      <SelectTrigger className="mt-1 h-9 w-full bg-white/5 border-white/10 text-white/90">
+                                        <SelectValue />
+                                      </SelectTrigger>
+                                      <SelectContent className="bg-zinc-950 border-white/10 text-white/90">
+                                        {(["bold_pop", "clean_caption", "creator_neon"] as const).map((preset) => (
+                                          <SelectItem key={preset} value={preset} className="focus:bg-cyan-500/20 cursor-pointer">
+                                            {CREATOR_SUBTITLE_STYLE_LABELS[preset]}
+                                          </SelectItem>
+                                        ))}
+                                      </SelectContent>
+                                    </Select>
+                                  </label>
+                                </div>
+                                <div className="rounded-xl border border-cyan-400/15 bg-cyan-400/8 px-3 py-2 text-[11px] leading-relaxed text-cyan-100/80">
+                                  Subtitle backgrounds now render in both preview and export, so you can safely use a boxed style again.
+                                </div>
+                                <label className="text-xs text-white/70 block">Letter width: {resolvedSubtitleStyle.letterWidth.toFixed(2)}x</label>
+                                <input
+                                  type="range"
+                                  min={1}
+                                  max={1.5}
+                                  step={0.01}
+                                  value={resolvedSubtitleStyle.letterWidth}
+                                  onChange={(e) => {
+                                    setSubtitleStyleOverrides((prev) => ({ ...prev, letterWidth: Number(e.target.value) }));
+                                  }}
+                                  className="w-full"
+                                />
+                                <label className="text-xs text-white/70 block">Letter border width: {resolvedSubtitleStyle.borderWidth.toFixed(1)}px</label>
+                                <input
+                                  type="range"
+                                  min={0}
+                                  max={8}
+                                  step={0.1}
+                                  value={resolvedSubtitleStyle.borderWidth}
+                                  onChange={(e) => {
+                                    setSubtitleStyleOverrides((prev) => ({ ...prev, borderWidth: Number(e.target.value) }));
+                                  }}
+                                  className="w-full"
+                                />
+                                <label className="text-xs text-white/70 block">
+                                  Shadow opacity: {Math.round(resolvedSubtitleStyle.shadowOpacity * 100)}%
+                                </label>
+                                <input
+                                  type="range"
+                                  min={0}
+                                  max={1}
+                                  step={0.01}
+                                  value={resolvedSubtitleStyle.shadowOpacity}
+                                  onChange={(e) => {
+                                    setSubtitleStyleOverrides((prev) => ({ ...prev, shadowOpacity: Number(e.target.value) }));
+                                  }}
+                                  className="w-full"
+                                />
+                                <label className="text-xs text-white/70 block">Shadow distance: {resolvedSubtitleStyle.shadowDistance.toFixed(1)}px</label>
+                                <input
+                                  type="range"
+                                  min={0}
+                                  max={8}
+                                  step={0.1}
+                                  value={resolvedSubtitleStyle.shadowDistance}
+                                  onChange={(e) => {
+                                    setSubtitleStyleOverrides((prev) => ({ ...prev, shadowDistance: Number(e.target.value) }));
+                                  }}
+                                  className="w-full"
+                                />
+                                <label className="text-xs text-white/70 block">
+                                  Text case
+                                  <Select
+                                    value={resolvedSubtitleStyle.textCase}
+                                    onValueChange={(value) => {
+                                      if (value !== "original" && value !== "uppercase") return;
+                                      setSubtitleStyleOverrides((prev) => ({ ...prev, textCase: value }));
+                                    }}
+                                  >
+                                    <SelectTrigger className="mt-1 h-9 w-full bg-white/5 border-white/10 text-white/90">
+                                      <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent className="bg-zinc-950 border-white/10 text-white/90">
+                                      <SelectItem value="original" className="focus:bg-cyan-500/20 cursor-pointer">Original</SelectItem>
+                                      <SelectItem value="uppercase" className="focus:bg-cyan-500/20 cursor-pointer">Uppercase</SelectItem>
+                                    </SelectContent>
+                                  </Select>
+                                </label>
+                                <div className="rounded-xl border border-white/10 bg-white/[0.04] p-3 space-y-3">
+                                  <div className="flex items-center justify-between gap-3">
+                                    <div>
+                                      <div className="text-xs font-semibold text-white/85">Subtitle background</div>
+                                      <div className="text-[11px] text-white/50 leading-relaxed">
+                                        Add a rounded box behind the whole subtitle block for busy footage.
+                                      </div>
+                                    </div>
+                                    <label className="flex items-center gap-2 text-xs text-white/75">
+                                      <input
+                                        type="checkbox"
+                                        checked={resolvedSubtitleStyle.backgroundEnabled}
+                                        onChange={(e) => {
+                                          setSubtitleStyleOverrides((prev) => ({ ...prev, backgroundEnabled: e.target.checked }));
+                                        }}
+                                      />
+                                      Enable
+                                    </label>
+                                  </div>
+                                  {resolvedSubtitleStyle.backgroundEnabled ? (
+                                    <>
+                                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                        <label className="text-xs text-white/70 block">
+                                          Background color
+                                          <input
+                                            type="color"
+                                            value={resolvedSubtitleStyle.backgroundColor}
+                                            onChange={(e) => {
+                                              setSubtitleStyleOverrides((prev) => ({ ...prev, backgroundColor: e.target.value.toUpperCase() }));
+                                            }}
+                                            className="mt-1 h-9 w-full rounded-md border border-white/10 bg-white/5"
+                                          />
+                                        </label>
+                                        <label className="text-xs text-white/70 block">
+                                          Background opacity: {Math.round(resolvedSubtitleStyle.backgroundOpacity * 100)}%
+                                          <input
+                                            type="range"
+                                            min={0}
+                                            max={1}
+                                            step={0.01}
+                                            value={resolvedSubtitleStyle.backgroundOpacity}
+                                            onChange={(e) => {
+                                              setSubtitleStyleOverrides((prev) => ({ ...prev, backgroundOpacity: Number(e.target.value) }));
+                                            }}
+                                            className="mt-1 w-full"
+                                          />
+                                        </label>
+                                      </div>
+                                      <label className="text-xs text-white/70 block">
+                                        Rounded corners: {resolvedSubtitleStyle.backgroundRadius.toFixed(0)}px
+                                      </label>
+                                      <input
+                                        type="range"
+                                        min={0}
+                                        max={80}
+                                        step={1}
+                                        value={resolvedSubtitleStyle.backgroundRadius}
+                                        onChange={(e) => {
+                                          setSubtitleStyleOverrides((prev) => ({ ...prev, backgroundRadius: Number(e.target.value) }));
+                                        }}
+                                        className="w-full"
+                                      />
+                                      <label className="text-xs text-white/70 block">
+                                        Horizontal padding: {resolvedSubtitleStyle.backgroundPaddingX.toFixed(0)}px
+                                      </label>
+                                      <input
+                                        type="range"
+                                        min={0}
+                                        max={80}
+                                        step={1}
+                                        value={resolvedSubtitleStyle.backgroundPaddingX}
+                                        onChange={(e) => {
+                                          setSubtitleStyleOverrides((prev) => ({ ...prev, backgroundPaddingX: Number(e.target.value) }));
+                                        }}
+                                        className="w-full"
+                                      />
+                                      <label className="text-xs text-white/70 block">
+                                        Vertical padding: {resolvedSubtitleStyle.backgroundPaddingY.toFixed(0)}px
+                                      </label>
+                                      <input
+                                        type="range"
+                                        min={0}
+                                        max={48}
+                                        step={1}
+                                        value={resolvedSubtitleStyle.backgroundPaddingY}
+                                        onChange={(e) => {
+                                          setSubtitleStyleOverrides((prev) => ({ ...prev, backgroundPaddingY: Number(e.target.value) }));
+                                        }}
+                                        className="w-full"
+                                      />
+                                    </>
+                                  ) : (
+                                    <div className="text-[11px] leading-relaxed text-white/55">
+                                      Background is off. Turn it on for a pill or caption-card look behind the subtitles.
+                                    </div>
+                                  )}
+                                </div>
+                                <div className="flex justify-end">
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="ghost"
+                                    className="h-7 px-2 text-xs bg-white/5 hover:bg-white/10 text-white/80"
+                                    onClick={() => {
+                                      setSubtitleStyleOverrides({});
+                                    }}
+                                  >
+                                    Use Plan Default Style
+                                  </Button>
+                                </div>
+                              </>
+                            ) : (
+                              <div className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-3 text-[11px] leading-relaxed text-white/60">
+                                Subtitle placement and styling controls are hidden while subtitles are disabled.
+                              </div>
+                            )}
                             <label className="flex items-center gap-2 text-xs text-white/70 mt-2">
                               <input type="checkbox" checked={showSafeZones} onChange={(e) => setShowSafeZones(e.target.checked)} />
                               Show platform safe zones
