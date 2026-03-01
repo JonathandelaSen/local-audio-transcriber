@@ -180,40 +180,29 @@ function SubtitlePreviewText({
   shadowScale?: number;
   className?: string;
 }) {
-  const widthOffsets = getSubtitleLetterWidthOffsets(fontSizePx, subtitleStyle.letterWidth);
-  const sharedLayerStyle: CSSProperties = {
-    display: "block",
-    whiteSpace: "pre-line",
-    textAlign: "center",
-    fontSize: `${fontSizePx}px`,
-    lineHeight: `${lineHeightPx}px`,
-    fontWeight: 700,
-    fontFamily: "var(--font-inter), 'Inter', sans-serif",
-    color: subtitleStyle.textColor,
-  };
+  const letterScale = Math.max(1, Math.min(1.5, subtitleStyle.letterWidth));
 
   return (
-    <span className={className} style={{ position: "relative", display: "inline-block", maxWidth: "100%" }}>
-      {widthOffsets.map((offset) => (
-        <span
-          key={offset.toFixed(2)}
-          aria-hidden="true"
-          style={{
-            ...sharedLayerStyle,
-            position: "absolute",
-            inset: 0,
-            transform: `translateX(${offset.toFixed(2)}px)`,
-            opacity: subtitleFillLayerOpacity(offset),
-            pointerEvents: "none",
-          }}
-        >
-          {text}
-        </span>
-      ))}
+    <span
+      className={className}
+      style={{
+        position: "relative",
+        display: "inline-block",
+        maxWidth: "100%",
+        transform: `scaleX(${letterScale})`,
+        transformOrigin: "center center",
+      }}
+    >
       <span
         style={{
-          ...sharedLayerStyle,
-          position: "relative",
+          display: "block",
+          whiteSpace: "pre-line",
+          textAlign: "center",
+          fontSize: `${fontSizePx}px`,
+          lineHeight: `${lineHeightPx}px`,
+          fontWeight: 700,
+          fontFamily: "var(--font-inter), 'Inter', sans-serif",
+          color: subtitleStyle.textColor,
           WebkitTextStroke: `${borderWidthPx.toFixed(2)}px ${cssRgbaFromHex(subtitleStyle.borderColor, 0.95)}`,
           textShadow: cssTextShadowFromStyle(subtitleStyle, shadowScale),
           paintOrder: "stroke fill",
