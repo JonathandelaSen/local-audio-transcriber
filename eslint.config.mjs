@@ -12,7 +12,29 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Generated test output from `tsconfig.tests.json`.
+    ".tmp/**",
   ]),
+  {
+    files: ["src/lib/creator/core/**/*.ts"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              group: ["@/components/*", "@/hooks/*", "@/app/*"],
+              message: "Creator core modules must stay UI-independent.",
+            },
+            {
+              group: ["@/lib/db", "@/lib/db/*"],
+              message: "Creator core modules must not depend on database adapters.",
+            },
+          ],
+        },
+      ],
+    },
+  },
 ]);
 
 export default eslintConfig;

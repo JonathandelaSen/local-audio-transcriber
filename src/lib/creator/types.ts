@@ -132,12 +132,12 @@ export type CreatorSubtitleTextCase = "original" | "uppercase";
 export interface CreatorSubtitleStyleSettings {
   preset: CreatorVerticalEditorPreset["subtitleStyle"];
   textColor: string;
-  backgroundColor: string;
-  backgroundOpacity: number;
-  backgroundRadius: number;
-  outlineColor: string;
-  outlineWidth: number;
-  backgroundPadding: number;
+  letterWidth: number;
+  borderColor: string;
+  borderWidth: number;
+  shadowColor: string;
+  shadowOpacity: number;
+  shadowDistance: number;
   textCase: CreatorSubtitleTextCase;
 }
 

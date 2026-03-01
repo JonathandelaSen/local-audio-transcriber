@@ -1,8 +1,11 @@
 import { getFFmpeg } from "@/lib/ffmpeg";
+import { assertExportGeometryInvariants } from "@/lib/creator/core/export-contracts";
 import { buildShortExportGeometry } from "@/lib/creator/core/export-geometry";
 import {
   ffmpegColorWithAlpha,
-  ffmpegHexColorFromCss,
+  getSubtitleLetterWidthOffsets,
+  getSubtitleMaxCharsPerLine,
+  getSubtitleWeightBoostOffsets,
   resolveCreatorSubtitleStyle,
   wrapSubtitleLines,
 } from "@/lib/creator/subtitle-style";
@@ -53,7 +56,6 @@ function parseFfmpegLogProgressSeconds(message: string): number | null {
 }
 
 function drawtextEscape(text: string): string {
-  // FFmpeg drawtext escaping: escape special filter chars and single quotes
   return text
     .replace(/\\/g, "\\\\")
     .replace(/'/g, "'\\''")
@@ -63,6 +65,48 @@ function drawtextEscape(text: string): string {
     .replace(/;/g, "\\;")
     .replace(/%/g, "%%")
     .replace(/\r/g, "");
+}
+
+function withPixelOffset(expression: string, offsetPx: number): string {
+  if (Math.abs(offsetPx) < 0.001) return expression;
+  const normalized = Math.abs(offsetPx).toFixed(2);
+  return offsetPx > 0 ? `(${expression}+${normalized})` : `(${expression}-${normalized})`;
+}
+
+function buildDrawtextFilter(options: {
+  escapedText: string;
+  fontSize: number;
+  textColor: string;
+  textAlpha?: number;
+  borderColor: string;
+  borderAlpha?: number;
+  borderWidth: number;
+  shadowColor: string;
+  shadowOpacity: number;
+  shadowDistance: number;
+  xExpr: string;
+  yExpr: string;
+  enableExpr: string;
+}): string {
+  const textColor = ffmpegColorWithAlpha(options.textColor, options.textAlpha ?? 1);
+  const borderColor = ffmpegColorWithAlpha(options.borderColor, options.borderAlpha ?? 1);
+
+  return (
+    `drawtext=fontfile=${FONT_PATH}` +
+    `:text='${options.escapedText}'` +
+    `:fontsize=${options.fontSize}` +
+    `:fontcolor=${textColor}` +
+    `:fix_bounds=1` +
+    `:borderw=${options.borderWidth.toFixed(2)}` +
+    `:bordercolor=${borderColor}` +
+    `:shadowx=${options.shadowDistance.toFixed(2)}` +
+    `:shadowy=${options.shadowDistance.toFixed(2)}` +
+    `:shadowcolor=${ffmpegColorWithAlpha(options.shadowColor, options.shadowOpacity)}` +
+    `:box=0` +
+    `:x=${options.xExpr}` +
+    `:y=${options.yExpr}` +
+    `:enable='${options.enableExpr}'`
+  );
 }
 
 const FONT_URL = "https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/inter/Inter%5Bopsz%2Cwght%5D.ttf";
@@ -101,11 +145,7 @@ function buildDrawtextSubtitleFilters(
       const text = String(chunk.text ?? "").replace(/\s+/g, " ").trim();
       if (!text || start == null || end == null || end <= start) return null;
       if (start > clip.durationSeconds + 0.25) return null;
-      return {
-        start,
-        end: Math.min(end, clip.durationSeconds),
-        text,
-      };
+      return { start, end: Math.min(end, clip.durationSeconds), text };
     })
     .filter((row): row is { start: number; end: number; text: string } => !!row);
 
@@ -113,73 +153,73 @@ function buildDrawtextSubtitleFilters(
 
   const style = resolveCreatorSubtitleStyle(plan.subtitleStyle, editor.subtitleStyle);
   const fontSize = Math.round(clamp(56 * editor.subtitleScale, 36, 96));
-  // Estimate max chars per line: ~80% of output width / (fontSize * 0.55 avg char width)
-  const maxCharsPerLine = Math.max(10, Math.round((OUTPUT_WIDTH * 0.80) / (fontSize * 0.55)));
+  const maxCharsPerLine = getSubtitleMaxCharsPerLine(fontSize, style.letterWidth, OUTPUT_WIDTH);
 
-  // Scale padding proportionally to fontSize (style values are calibrated for ~14 px CSS preview font).
-  const PREVIEW_BASE_FONT_PX = 14;
-  const paddingScale = fontSize / PREVIEW_BASE_FONT_PX;
-  const scaledPaddingH = Math.round(style.backgroundPadding * paddingScale);
-  const scaledPaddingV = Math.max(Math.round(scaledPaddingH * 0.55), 4);
-
-  // Line height: 1.18× font size (matches the CSS preview line spacing).
-  const lineHeight = Math.round(fontSize * 1.18);
-
+  // Anchor point (fractions of canvas)
   const xPct = (editor.subtitleXPositionPct / 100).toFixed(4);
   const yPct = (editor.subtitleYOffsetPct / 100).toFixed(4);
+
+  // lineStep: vertical distance between the tops of adjacent lines.
+  const lineStep = Math.round(fontSize * 1.18);
+  const fillOffsets = [...new Set([...getSubtitleWeightBoostOffsets(fontSize), ...getSubtitleLetterWidthOffsets(fontSize, style.letterWidth)])]
+    .sort((a, b) => a - b);
+  const borderWidthBoost = fillOffsets.length ? clamp(Math.max(...fillOffsets.map((offset) => Math.abs(offset))) * 0.08, 0, 0.7) : 0;
+  const effectiveBorderWidth = style.borderWidth + borderWidthBoost;
 
   return chunks.flatMap((chunk) => {
     const transformed = style.textCase === "uppercase" ? chunk.text.toUpperCase() : chunk.text;
     const lines = wrapSubtitleLines(transformed, maxCharsPerLine);
-
-    // Strategy: drawbox draws ONE unified background rectangle (no per-line overlap / alpha seams).
-    // drawtext lines are drawn WITHOUT box on top of it.
-    const maxLineChars = Math.max(...lines.map((l) => l.length));
-    const estTextW = Math.round(maxLineChars * fontSize * 0.58);
-    const boxW = Math.min(estTextW + 2 * scaledPaddingH, Math.round(OUTPUT_WIDTH * 0.92));
-    const totalTextH = lines.length * lineHeight;
-    const boxH = totalTextH + 2 * scaledPaddingV;
-
-    // Box top-left (centered at the anchor point).
-    const boxX = `(w*${xPct}-${Math.round(boxW / 2)})`;
-    const boxY = `(h*${yPct}-${Math.round(boxH / 2)})`;
+    const centerIndex = (lines.length - 1) / 2;
 
     const enableExpr = `between(t,${(chunk.start + timeOffsetSeconds).toFixed(3)},${(chunk.end + timeOffsetSeconds).toFixed(3)})`;
     const filters: string[] = [];
 
-    // 1. Single drawbox — one rectangle, no alpha seams.
-    if (style.backgroundOpacity > 0) {
-      filters.push(
-        `drawbox` +
-        `=x=${boxX}` +
-        `:y=${boxY}` +
-        `:w=${boxW}` +
-        `:h=${boxH}` +
-        `:color=${ffmpegColorWithAlpha(style.backgroundColor, style.backgroundOpacity)}` +
-        `:t=fill` +
-        `:enable='${enableExpr}'`
-      );
-    }
-
-    // 2. One drawtext per line with box=0 — each line centered horizontally via tw.
+    // Per-line drawtext with centered text positioning. Each line is vertically stacked
+    // around the same anchor point used by the editor preview.
     lines.forEach((line, i) => {
       const escaped = drawtextEscape(line);
-      // y of this line: start from the top of the text block (inside the box padding).
-      const blockTopOffset = Math.round(boxH / 2) - scaledPaddingV;
-      const lineYExpr = `(h*${yPct}-${blockTopOffset - i * lineHeight})`;
+      const offsetPx = Math.round((i - centerIndex) * lineStep);
+      const baseY = `(h*${yPct}-th/2)`;
+      const yExpr = offsetPx === 0 ? baseY : (offsetPx > 0 ? `(${baseY}+${offsetPx})` : `(${baseY}-${-offsetPx})`);
+      const baseX = `(w*${xPct}-tw/2)`;
+
+      fillOffsets.forEach((xOffset) => {
+        const fillAlpha = Math.abs(xOffset) < 0.8 ? 0.32 : 0.24;
+        filters.push(
+          buildDrawtextFilter({
+            escapedText: escaped,
+            fontSize,
+            textColor: style.textColor,
+            textAlpha: fillAlpha,
+            borderColor: style.borderColor,
+            borderAlpha: 0,
+            borderWidth: 0,
+            shadowColor: style.shadowColor,
+            shadowOpacity: 0,
+            shadowDistance: 0,
+            xExpr: withPixelOffset(baseX, xOffset),
+            yExpr,
+            enableExpr,
+          })
+        );
+      });
 
       filters.push(
-        `drawtext=fontfile=${FONT_PATH}` +
-        `:text='${escaped}'` +
-        `:fontsize=${fontSize}` +
-        `:fontcolor=${ffmpegHexColorFromCss(style.textColor)}` +
-        `:fix_bounds=1` +
-        `:borderw=${style.outlineWidth.toFixed(2)}` +
-        `:bordercolor=${ffmpegHexColorFromCss(style.outlineColor)}` +
-        `:box=0` +
-        `:x=(w*${xPct}-tw/2)` +
-        `:y=${lineYExpr}` +
-        `:enable='${enableExpr}'`
+        buildDrawtextFilter({
+          escapedText: escaped,
+          fontSize,
+          textColor: style.textColor,
+          textAlpha: 1,
+          borderColor: style.borderColor,
+          borderAlpha: 1,
+          borderWidth: effectiveBorderWidth,
+          shadowColor: style.shadowColor,
+          shadowOpacity: style.shadowOpacity,
+          shadowDistance: style.shadowDistance,
+          xExpr: baseX,
+          yExpr,
+          enableExpr,
+        })
       );
     });
 
@@ -226,17 +266,25 @@ export async function exportShortVideoLocally(input: LocalShortExportInput): Pro
     outputWidth: OUTPUT_WIDTH,
     outputHeight: OUTPUT_HEIGHT,
   });
+  const geometryContract = assertExportGeometryInvariants(
+    {
+      sourceWidth: input.sourceVideoSize.width,
+      sourceHeight: input.sourceVideoSize.height,
+      geometry: preview,
+      expectedOutputWidth: OUTPUT_WIDTH,
+      expectedOutputHeight: OUTPUT_HEIGHT,
+    },
+    { contextLabel: "local-export" }
+  );
 
   const clipDuration = Math.max(0.5, input.clip.endSeconds - input.clip.startSeconds);
   const inputSeekSeconds = Math.max(0, input.clip.startSeconds - FAST_SEEK_CUSHION_SECONDS);
   const exactTrimAfterSeekSeconds = Math.max(0, input.clip.startSeconds - inputSeekSeconds);
 
-  // Offset subtitle times by exactTrimAfterSeekSeconds because the filter graph
-  // processes frames starting from the first -ss seek point, not the clip start.
-  // The second -ss then trims and rebases output timestamps.
   const subtitleDrawtextFilters = buildDrawtextSubtitleFilters(
     input.subtitleChunks ?? [], input.clip, input.plan, input.editor, exactTrimAfterSeekSeconds
   );
+
 
   let lastProgressPct = 0;
   const emitProgress = (pct: number) => {
@@ -481,6 +529,7 @@ export async function exportShortVideoLocally(input: LocalShortExportInput): Pro
 
     const notes = [
       `Local browser render via ffmpeg.wasm (${input.plan.platform})`,
+      `Geometry contract checks passed (scaleDelta=${geometryContract.metrics.scaleDeltaPct.toFixed(4)}%, aspectDelta=${geometryContract.metrics.aspectRatioDeltaPct.toFixed(4)}%).`,
       usedSeekMode === "hybrid"
         ? inputSeekSeconds > 0
           ? `Hybrid trim seek enabled: fast pre-seek ${inputSeekSeconds.toFixed(2)}s, exact post-seek ${exactTrimAfterSeekSeconds.toFixed(2)}s.`
@@ -497,9 +546,9 @@ export async function exportShortVideoLocally(input: LocalShortExportInput): Pro
       usedSubtitleBurnIn
         ? `Subtitles burned in at x=${input.editor.subtitleXPositionPct.toFixed(0)}%, y=${input.editor.subtitleYOffsetPct.toFixed(0)}% using ${effectiveSubtitleStyle.preset}.`
         : "Rendered without burned subtitles (subtitle filter unavailable or no subtitle chunks).",
-      effectiveSubtitleStyle.backgroundRadius > 0
-        ? "Rounded subtitle box corners are preview-only right now; FFmpeg drawtext export uses square boxes."
-        : "Subtitle box corners exported as square boxes.",
+      "Export uses a single outline/shadow pass with subtle fill spreads so wider letters do not duplicate borders.",
+      `Letter width scale ${effectiveSubtitleStyle.letterWidth.toFixed(2)}x.`,
+      `Subtitle styling uses text border ${effectiveSubtitleStyle.borderWidth.toFixed(1)}px plus shadow ${effectiveSubtitleStyle.shadowDistance.toFixed(1)}px.`,
     ];
 
     return {

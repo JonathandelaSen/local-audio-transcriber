@@ -44,3 +44,8 @@ next-env.d.ts
 # local agent instructions
 AGENTS.md
 .agents/skills/
+.agent/
+.claude/
+.crush/
+.windsurf/
+skills-lock.json

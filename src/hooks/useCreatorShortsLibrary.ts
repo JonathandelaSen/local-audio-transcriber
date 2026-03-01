@@ -55,6 +55,12 @@ export function useCreatorShortsLibrary(sourceProjectId?: string) {
     });
   }, []);
 
+  const deleteProject = useCallback(async (projectId: string) => {
+    await creatorShortsRepository.deleteProject(projectId);
+    setProjects((prev) => prev.filter((item) => item.id !== projectId));
+    setExports((prev) => prev.filter((item) => item.shortProjectId !== projectId));
+  }, []);
+
   const exportsByProjectId = useMemo(() => {
     return groupCreatorShortExportsByProjectId(exports);
   }, [exports]);
@@ -68,5 +74,6 @@ export function useCreatorShortsLibrary(sourceProjectId?: string) {
     refresh,
     upsertProject,
     upsertExport,
+    deleteProject,
   };
 }

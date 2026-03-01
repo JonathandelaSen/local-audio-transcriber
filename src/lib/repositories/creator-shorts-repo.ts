@@ -6,6 +6,7 @@ export interface CreatorShortsRepository {
   listExports(sourceProjectId?: string): Promise<CreatorShortExportRecord[]>;
   putProject(record: CreatorShortProjectRecord): Promise<void>;
   putExport(record: CreatorShortExportRecord): Promise<void>;
+  deleteProject(projectId: string): Promise<void>;
 }
 
 export function sortCreatorShortProjects(records: CreatorShortProjectRecord[]): CreatorShortProjectRecord[] {
@@ -49,6 +50,12 @@ export function createDexieCreatorShortsRepository(database: AudioTranscriberDB 
     async putExport(record) {
       await database.creatorShortExports.put(record);
     },
+
+    async deleteProject(projectId) {
+      await database.transaction("rw", database.creatorShortProjects, database.creatorShortExports, async () => {
+        await database.creatorShortProjects.delete(projectId);
+        await database.creatorShortExports.where("shortProjectId").equals(projectId).delete();
+      });
+    },
   };
 }
-
