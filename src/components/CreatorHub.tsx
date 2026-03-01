@@ -100,6 +100,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Toaster } from "@/components/ui/sonner";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 function copyText(text: string, label: string) {
   navigator.clipboard.writeText(text);
@@ -1994,8 +1995,8 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
                     </CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-5">
-                    <div className="grid grid-cols-1 2xl:grid-cols-[420px_1fr] gap-5">
-                      <div className="space-y-3">
+                    <div className="grid grid-cols-1 xl:grid-cols-[380px_1fr] 2xl:grid-cols-[440px_1fr] gap-8">
+                      <div className="space-y-3 sticky top-6 self-start">
                         <div
                           ref={previewFrameRef}
                           className="relative mx-auto w-full max-w-[420px] aspect-[9/16] rounded-[1.6rem] border border-white/15 overflow-hidden bg-black shadow-2xl"
@@ -2143,10 +2144,19 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
                         )}
                       </div>
 
-                      <div className="space-y-4">
-                        <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
-                          <div className="rounded-xl border border-white/10 bg-black/20 p-4 space-y-3">
-                            <div className="text-xs uppercase tracking-wider text-white/50">Trim + Framing</div>
+                      <div className="space-y-4 min-w-0">
+                        <Tabs defaultValue="subtitles" className="w-full">
+                          <TabsList className="grid w-full grid-cols-3 mb-6 bg-black/40 border border-white/10 p-1.5 rounded-xl h-auto gap-1">
+                            <TabsTrigger value="framing" className="py-2.5 rounded-lg data-[state=active]:bg-white/10 data-[state=active]:text-white text-white/50 hover:text-white transition-colors">Framing & Trim</TabsTrigger>
+                            <TabsTrigger value="subtitles" className="py-2.5 rounded-lg data-[state=active]:bg-white/10 data-[state=active]:text-white text-cyan-50 hover:text-white transition-colors">Subtitles</TabsTrigger>
+                            <TabsTrigger value="export" className="py-2.5 rounded-lg data-[state=active]:bg-white/10 data-[state=active]:text-white text-white/50 hover:text-white transition-colors">Save & Export</TabsTrigger>
+                          </TabsList>
+                          
+                          <TabsContent value="framing" className="mt-0 outline-none">
+                            <div className="rounded-xl border border-white/10 bg-black/20 p-5 space-y-5">
+                              <div className="text-sm font-semibold text-white/90 flex items-center gap-2">
+                                Framing Controls
+                              </div>
                             {editedClip && (
                               <div className="rounded-xl border border-white/10 bg-black/40 p-4 space-y-5">
                                 <div className="space-y-3">
@@ -2260,10 +2270,14 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
                             <input type="range" min={-600} max={600} step={1} value={panX} onChange={(e) => setPanX(Number(e.target.value))} className="w-full" />
                             <label className="text-xs text-white/70 block">Pan Y: {panY}px</label>
                             <input type="range" min={-600} max={600} step={1} value={panY} onChange={(e) => setPanY(Number(e.target.value))} className="w-full" />
-                          </div>
+                            </div>
+                          </TabsContent>
 
-                          <div className="rounded-xl border border-white/10 bg-black/20 p-4 space-y-3">
-                            <div className="text-xs uppercase tracking-wider text-white/50">Subtitles</div>
+                          <TabsContent value="subtitles" className="mt-0 outline-none">
+                            <div className="rounded-xl border border-white/10 bg-black/20 p-5 space-y-5">
+                              <div className="text-sm font-semibold text-white/90 flex items-center gap-2">
+                                Subtitle Appearance
+                              </div>
                             <label className="flex items-start gap-2 rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-white/80">
                               <input
                                 type="checkbox"
@@ -2283,9 +2297,9 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
                                 <input type="range" min={10} max={90} step={1} value={subtitleXPositionPct} onChange={(e) => setSubtitleXPositionPct(Number(e.target.value))} className="w-full" />
                                 <label className="text-xs text-white/70 block">Subtitle vertical position: {subtitleYOffsetPct.toFixed(0)}%</label>
                                 <input type="range" min={45} max={92} step={1} value={subtitleYOffsetPct} onChange={(e) => setSubtitleYOffsetPct(Number(e.target.value))} className="w-full" />
-                                <div className="space-y-2 pt-1">
-                                  <div className="text-xs text-white/70">Quick styles</div>
-                                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                <div className="space-y-3 pt-2">
+                                  <div className="text-sm font-medium text-white/80">Quick Styles</div>
+                                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                                     {COMMON_SUBTITLE_STYLE_PRESETS.map((quick) => (
                                       <button
                                         key={quick.id}
@@ -2293,21 +2307,21 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
                                         onClick={() => {
                                           setSubtitleStyleOverrides({ ...quick.style });
                                         }}
-                                        className="rounded-xl border border-white/10 bg-white/[0.06] hover:bg-white/[0.09] text-left p-2.5 transition-colors"
+                                        className="rounded-2xl border border-white/10 bg-black/40 hover:bg-white/5 hover:border-white/20 text-left p-4 transition-all group"
                                       >
-                                        <div className="mb-2 rounded-lg border border-white/10 bg-[linear-gradient(135deg,rgba(3,7,18,0.92),rgba(19,34,54,0.82)_55%,rgba(88,28,135,0.35))] px-3 py-3 shadow-inner">
+                                        <div className="mb-3 rounded-xl border border-white/10 bg-[linear-gradient(135deg,rgba(3,7,18,0.92),rgba(19,34,54,0.82)_55%,rgba(88,28,135,0.35))] px-4 py-8 shadow-inner flex items-center justify-center group-hover:shadow-cyan-500/10 transition-shadow">
                                           <SubtitlePreviewText
-                                            text="Make it readable"
+                                            text="Captions Rock!"
                                             subtitleStyle={quick.style}
-                                            fontSizePx={15}
-                                            lineHeightPx={16.5}
-                                            borderWidthPx={1.4}
-                                            shadowScale={0.45}
+                                            fontSizePx={22}
+                                            lineHeightPx={24}
+                                            borderWidthPx={2}
+                                            shadowScale={0.7}
                                             className="text-center"
                                           />
                                         </div>
-                                        <div className="text-xs font-semibold text-white/90">{quick.name}</div>
-                                        <div className="text-[11px] text-white/55 mt-0.5 leading-relaxed">{quick.description}</div>
+                                        <div className="text-sm font-semibold text-white/90">{quick.name}</div>
+                                        <div className="text-xs text-white/55 mt-1 leading-relaxed">{quick.description}</div>
                                       </button>
                                     ))}
                                   </div>
@@ -2555,14 +2569,18 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
                                 Subtitle placement and styling controls are hidden while subtitles are disabled.
                               </div>
                             )}
-                            <label className="flex items-center gap-2 text-xs text-white/70 mt-2">
+                            <label className="flex items-center gap-2 text-xs text-white/70 mt-4">
                               <input type="checkbox" checked={showSafeZones} onChange={(e) => setShowSafeZones(e.target.checked)} />
                               Show platform safe zones
                             </label>
-                          </div>
+                            </div>
+                          </TabsContent>
 
-                          <div className="rounded-xl border border-white/10 bg-black/20 p-4 space-y-3">
-                            <div className="text-xs uppercase tracking-wider text-white/50">Save + Export</div>
+                          <TabsContent value="export" className="mt-0 outline-none">
+                            <div className="rounded-xl border border-white/10 bg-black/20 p-5 space-y-5">
+                              <div className="text-sm font-semibold text-white/90 flex items-center gap-2">
+                                Save Config & Render
+                              </div>
                             <div className="text-xs text-white/60 leading-relaxed">
                               Export creates an MP4 locally in the browser, stores the file blob + editor configuration in IndexedDB, and downloads it immediately.
                             </div>
@@ -2695,12 +2713,13 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
                                 )}
                               </div>
                             )}
-                          </div>
-                        </div>
+                            </div>
+                          </TabsContent>
+                        </Tabs>
 
 
                         {activeSavedShortProject && savedExportsForActiveShort.length > 0 && (
-                          <div className="rounded-xl border border-white/10 bg-black/20 p-4 space-y-3">
+                          <div className="rounded-xl border border-white/10 bg-black/20 p-5 space-y-4 shadow-xl">
                             <div className="text-sm font-semibold text-white/90">Saved Exports for Active Short</div>
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                               {savedExportsForActiveShort.map((exp) => (
