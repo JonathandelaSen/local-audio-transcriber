@@ -1183,7 +1183,7 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
   const pageDescription = isVideoInfoPage
     ? "Generate long-form titles, descriptions, chapters, hooks, and SEO blocks on a dedicated page. No clip tools mixed in."
     : isShortsPage
-      ? "Cut, frame, preview, save, and export vertical shorts on a dedicated page. This workspace is focused on clip production only."
+      ? ""
       : "Use your transcript as a source asset. Run only the tool you need: video info generation or clip lab + vertical editor.";
 
   return (
@@ -1316,7 +1316,7 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
                 {isToolLocked
                   ? isVideoInfoPage
                     ? "Select a transcript/subtitle source and generate only packaging outputs on this page. Use the hub to switch into shorts production."
-                    : "Select a transcript/subtitle source and run clip discovery/shorts workflows on this page. Packaging generation lives on its own page."
+                    : ""
                   : "Pick the transcript/subtitle source once, then run either tool independently. Video info supports scoped output blocks."}
               </CardDescription>
             </CardHeader>
@@ -1926,9 +1926,6 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
                   <Card className="bg-white/[0.03] border-white/10 text-white shadow-xl backdrop-blur-xl">
                     <CardHeader className="pb-4">
                       <CardTitle className="flex items-center gap-2 text-lg"><FolderOpen className="w-5 h-5 text-emerald-300" /> Saved Shorts</CardTitle>
-                      <CardDescription className="text-white/50 text-xs">
-                        Jump between presets quickly.
-                      </CardDescription>
                     </CardHeader>
                     <CardContent className="space-y-3">
                       {shortsLibraryError && (
@@ -1990,9 +1987,6 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
                 <Card className="bg-white/[0.03] border-white/10 text-white shadow-xl backdrop-blur-xl">
                   <CardHeader>
                     <CardTitle className="flex items-center gap-2"><Clapperboard className="w-5 h-5 text-fuchsia-300" /> Vertical Editor + Export</CardTitle>
-                    <CardDescription className="text-white/50">
-                      Full-width editor for framing and subtitle placement. Exports are rendered locally in the browser and saved in your shorts lifecycle.
-                    </CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-5">
                     <div className="grid grid-cols-1 xl:grid-cols-[380px_1fr] 2xl:grid-cols-[440px_1fr] gap-8">
@@ -2146,10 +2140,17 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
 
                       <div className="space-y-4 min-w-0">
                         <Tabs defaultValue="subtitles" className="w-full">
-                          <TabsList className="grid w-full grid-cols-3 mb-6 bg-black/40 border border-white/10 p-1.5 rounded-xl h-auto gap-1">
-                            <TabsTrigger value="framing" className="py-2.5 rounded-lg data-[state=active]:bg-white/10 data-[state=active]:text-white text-white/50 hover:text-white transition-colors">Framing & Trim</TabsTrigger>
-                            <TabsTrigger value="subtitles" className="py-2.5 rounded-lg data-[state=active]:bg-white/10 data-[state=active]:text-white text-cyan-50 hover:text-white transition-colors">Subtitles</TabsTrigger>
-                            <TabsTrigger value="export" className="py-2.5 rounded-lg data-[state=active]:bg-white/10 data-[state=active]:text-white text-white/50 hover:text-white transition-colors">Save & Export</TabsTrigger>
+                          <TabsList className="flex w-full mb-6 bg-black/40 border border-white/10 p-1.5 rounded-2xl h-auto gap-1 shadow-2xl relative overflow-hidden">
+                            <div className="absolute inset-0 bg-gradient-to-r from-fuchsia-500/5 via-cyan-500/5 to-transparent pointer-events-none" />
+                            <TabsTrigger value="framing" className="flex-1 py-3 rounded-xl data-[state=active]:bg-[linear-gradient(135deg,rgba(52,211,153,0.15),rgba(255,255,255,0.01))] data-[state=active]:border-emerald-400/30 data-[state=active]:text-emerald-50 text-white/50 hover:text-white/80 transition-all border border-transparent data-[state=active]:shadow-[0_0_15px_rgba(52,211,153,0.15)] font-medium tracking-wide relative">
+                              <span className="relative z-10">Framing & Trim</span>
+                            </TabsTrigger>
+                            <TabsTrigger value="subtitles" className="flex-1 py-3 rounded-xl data-[state=active]:bg-[linear-gradient(135deg,rgba(34,211,238,0.15),rgba(255,255,255,0.01))] data-[state=active]:border-cyan-400/30 data-[state=active]:text-cyan-50 text-cyan-50/50 hover:text-cyan-50 transition-all border border-transparent data-[state=active]:shadow-[0_0_15px_rgba(34,211,238,0.15)] font-medium tracking-wide relative">
+                               <span className="relative z-10">Subtitles</span>
+                            </TabsTrigger>
+                            <TabsTrigger value="export" className="flex-1 py-3 rounded-xl data-[state=active]:bg-[linear-gradient(135deg,rgba(232,121,249,0.15),rgba(255,255,255,0.01))] data-[state=active]:border-fuchsia-400/30 data-[state=active]:text-fuchsia-50 text-white/50 hover:text-white/80 transition-all border border-transparent data-[state=active]:shadow-[0_0_15px_rgba(232,121,249,0.15)] font-medium tracking-wide relative">
+                               <span className="relative z-10">Save & Export</span>
+                            </TabsTrigger>
                           </TabsList>
                           
                           <TabsContent value="framing" className="mt-0 outline-none">
@@ -2382,9 +2383,6 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
                                     </Select>
                                   </label>
                                 </div>
-                                <div className="rounded-xl border border-cyan-400/15 bg-cyan-400/8 px-3 py-2 text-[11px] leading-relaxed text-cyan-100/80">
-                                  Subtitle backgrounds now render in both preview and export, so you can safely use a boxed style again.
-                                </div>
                                 <label className="text-xs text-white/70 block">Letter width: {resolvedSubtitleStyle.letterWidth.toFixed(2)}x</label>
                                 <input
                                   type="range"
@@ -2581,9 +2579,6 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
                               <div className="text-sm font-semibold text-white/90 flex items-center gap-2">
                                 Save Config & Render
                               </div>
-                            <div className="text-xs text-white/60 leading-relaxed">
-                              Export creates an MP4 locally in the browser, stores the file blob + editor configuration in IndexedDB, and downloads it immediately.
-                            </div>
                             <div className="space-y-2">
                               <label className="text-xs text-white/70 block">
                                 Saved short name
@@ -2595,10 +2590,7 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
                                   className="mt-1 w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-white placeholder:text-white/35"
                                 />
                               </label>
-                              <div className="flex items-center justify-between gap-2">
-                                <div className="text-[11px] text-white/45">
-                                  Load a saved short, change this name, then click <span className="text-white/75">Save Short Config</span> to rename it.
-                                </div>
+                              <div className="flex items-center justify-end gap-2">
                                 <Button
                                   type="button"
                                   size="sm"
