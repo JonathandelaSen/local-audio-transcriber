@@ -146,7 +146,7 @@ export default function Home() {
           </div>
           <div className="inline-flex items-center gap-2 rounded-full border border-orange-300/20 bg-gradient-to-r from-orange-400/10 to-cyan-400/10 px-4 py-1.5 text-xs uppercase tracking-[0.22em] text-orange-100/80 shadow-[0_0_24px_rgba(249,115,22,0.12)]">
             <Clapperboard className="w-3.5 h-3.5" />
-            Media In, Assets Out
+            ClipScribe
           </div>
           <h1 className="text-5xl md:text-7xl lg:text-8xl font-black tracking-tight leading-[0.92]">
             <span className="block text-transparent bg-clip-text bg-gradient-to-r from-white via-zinc-100 to-zinc-400 drop-shadow-[0_0_24px_rgba(255,255,255,0.18)]">

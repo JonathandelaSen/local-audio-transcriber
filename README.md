@@ -1,4 +1,4 @@
-# Neural Whisper (Local Audio & Video Transcriber + Creator Hub)
+# ClipScribe
 
 <div align="center">
   <img src="./docs/creator_hub.png" alt="Main Screen" width="80%" />
@@ -10,7 +10,7 @@
   <img src="./docs/creator_shorts_export.png" alt="Shorts Forge Screen" width="30%" />
 </div>
 
-A modern, privacy-first web application built with [Next.js](http://nextjs.org) that allows users to seamlessly drag and drop audio and video files to receive highly accurate transcriptions. It also features built-in creator tools to plan, edit, and render short-form videos completely locally.
+A modern, privacy-first web application built with [Next.js](http://nextjs.org) that lets you drag and drop audio and video files for local transcription, subtitle workflows, and short-form clip creation. ClipScribe keeps the entire process in the browser so your media stays on your device.
 
 The application leverages a local Web Worker and client-side processing via Transformers.js for transcriptions, and FFmpeg WASM for video manipulation, ensuring efficient, private, and fast execution directly on your device.
 

@@ -18,7 +18,7 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "Media Transcript Studio",
+  title: "ClipScribe",
   description: "Private browser-native transcription, subtitle versioning, and creator tools for audio and video.",
 };
 

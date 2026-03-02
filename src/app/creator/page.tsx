@@ -52,7 +52,7 @@ export default function CreatorPage() {
           <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-white/10 bg-white/[0.03] text-sm text-zinc-300 backdrop-blur-sm relative overflow-hidden">
             <div className="absolute inset-0 bg-gradient-to-r from-indigo-500/10 to-purple-500/10" />
             <Sparkles className="w-4 h-4 text-indigo-400" />
-            <span className="relative z-10 font-medium">Creator Tools</span>
+            <span className="relative z-10 font-medium">ClipScribe Creator Tools</span>
           </div>
           
           <h1 className="text-4xl sm:text-5xl lg:text-6xl font-bold tracking-tight text-white">
